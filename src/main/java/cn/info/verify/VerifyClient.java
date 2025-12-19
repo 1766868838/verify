@@ -16,10 +16,25 @@ public class VerifyClient {
 
     private static final char[] HEX_ARRAY = "0123456789abcdef".toCharArray();
     private static final Charset UTF_8 = StandardCharsets.UTF_8;
-    private static final List<String> PRIMARY_KEYS = Arrays.asList("id");
-    private static final List<String> COMPARE_COLUMNS = Arrays.asList("name", "id", "phone", "age");
+    private static final List<String> PRIMARY_KEYS = new ArrayList<>();
+    private static final List<String> COMPARE_COLUMNS = new ArrayList<>();
     private static final int SPAN_KEY_SIZE = 16; // 16位，取MD5的前2个字节
 
+    /**
+     * 验证给定的数据表的数据一致性，并返回sql修复语句
+     * 现在有几个问题：
+     * 1. 当两张表的结构不同时，会导致结果出错
+     * 2. 当主键不唯一时出错
+     * @param conn1 生产数据库
+     * @param conn2 容灾数据库
+     * @param table1 生产表
+     * @param table2 容灾表
+     * @return {
+     *     错误报告，
+     *     PASS，
+     *     修复语句
+     * }
+     */
     public String Verify(Connection conn1, Connection conn2, String table1, String table2) throws SQLException {
 
         //先连接数据库
@@ -27,12 +42,11 @@ public class VerifyClient {
         Statement statement2 = conn2.createStatement();
 
         //拿主键
-        //catalog指定库的名字，需要用户输入或者从url中读取
+        // todo catalog指定库的名字，需要用户输入或者从url中读取
         DatabaseMetaData dbMetaData = conn1.getMetaData();
-        ResultSet set = dbMetaData.getPrimaryKeys("test1","test1",table1);
-        int count = 0;
+        ResultSet set = dbMetaData.getPrimaryKeys("test3",null,table1);
         while (set.next()){
-            PRIMARY_KEYS.set(count++,set.getString("COLUMN_NAME"));
+            PRIMARY_KEYS.add(set.getString("COLUMN_NAME"));
         }
         set.close();
 
@@ -56,7 +70,7 @@ public class VerifyClient {
         int columnCount = metaData.getColumnCount(); //获取列的数量
 
         for(int i = 1; i <= columnCount; i++){
-            COMPARE_COLUMNS.set(i-1,metaData.getColumnName(i));
+            COMPARE_COLUMNS.add(i-1,metaData.getColumnName(i));
         }
 
         //这里可以考虑先批量处理map1再addAll
@@ -97,7 +111,10 @@ public class VerifyClient {
 
 
         //todo 这里使用的是唯一的主键，如果主键不唯一还需要处理
-        Map<String,Map<String,Object>> index1 = createIndex(list1,PRIMARY_KEYS.get(0),map -> (String) map.get(PRIMARY_KEYS.get(0)) );
+        //如果是主键字符串拼接，这里是比较简单的
+        //Map<String,Map<String,Object>> index1 = createIndex(list1,PRIMARY_KEYS.get(0),map -> (String) map.get(PRIMARY_KEYS.get(0)) );
+        Map<String,Map<String,Object>> index1 = createIndexWithMultiKeys(list1);
+
         //这里假定table1是主库，不关心table2的数据
 //        Map<String,Map<String,Object>> index2 = new HashMap<>();
 //        index2 = createIndex(list2,"id",map -> (String) map.get("id") );
@@ -142,10 +159,21 @@ public class VerifyClient {
                 CompareTable ct = spanToCompareTableMap.get(span);
                 Map<String, Object> pkValues = ct.getPkValues();
                 if (pkValues != null) {
+                    StringBuilder pkBuilder = new StringBuilder();
+                    boolean first = true;
+
+                    //如果有多个主键的话，需要拼接字符串后再比较
                     for (Object pkValue : pkValues.values()) {
                         if (pkValue != null) {
-                            pkSet1.add(pkValue.toString());
+                            if (!first) {
+                                pkBuilder.append("|");
+                            }
+                            pkBuilder.append(pkValue.toString());
+                            first = false;
                         }
+                    }
+                    if (pkBuilder.length() > 0) {
+                        pkSet1.add(pkBuilder.toString());
                     }
                 }
             }
@@ -168,10 +196,19 @@ public class VerifyClient {
                 CompareTable ct = spanToCompareTableMap.get(span);
                 Map<String, Object> pkValues = ct.getPkValues();
                 if (pkValues != null) {
+                    StringBuilder pkBuilder = new StringBuilder();
+                    boolean first = true;
                     for (Object pkValue : pkValues.values()) {
                         if (pkValue != null) {
-                            pkSet2.add(pkValue.toString());
+                            if (!first) {
+                                pkBuilder.append("|");
+                            }
+                            pkBuilder.append(pkValue.toString());
+                            first = false;
                         }
+                    }
+                    if (pkBuilder.length() > 0) {
+                        pkSet2.add(pkBuilder.toString());
                     }
                 }
             }
@@ -201,7 +238,10 @@ public class VerifyClient {
                 });
                 //删除末尾的逗号
                 sql.deleteCharAt(sql.length()-1);
-                sql.append(" WHERE ").append("id").append(" = '").append(obj).append("';");
+                //这种写法只能适配一个主键，如果组合主键的话还要改
+                //sql.append(" WHERE ").append("id").append(" = '").append(obj).append("';");
+                MulQuery(sql, obj);
+
             }
         }
         //执行insert
@@ -250,10 +290,61 @@ public class VerifyClient {
         if(!extra2.isEmpty()){
             for(String obj: extra2){
                 sql.append("DELETE FROM ").append(table2);
-                sql.append(" WHERE ").append("id").append(" = '").append(obj).append("';");
+                //sql.append(" WHERE ").append("id").append(" = '").append(obj).append("';");
+                MulQuery(sql, obj);
             }
         }
         return sql.toString();
+    }
+
+    private void MulQuery(StringBuilder sql, String obj) {
+        String[] pkValues = obj.split("\\|");
+        StringBuilder whereClause = new StringBuilder(" WHERE ");
+        for (int i = 0; i < PRIMARY_KEYS.size(); i++) {
+            if (i > 0) {
+                whereClause.append(" AND ");
+            }
+            whereClause.append(PRIMARY_KEYS.get(i)).append(" = '").append(pkValues[i]).append("'");
+        }
+        sql.append(whereClause).append(";");
+    }
+
+    /**
+     * 比较数据库的对象差异，并返回sql修复语句
+     * @param conn1 生产数据库
+     * @param conn2 容灾数据库
+     * @return {
+     *     错误报告，
+     *     PASS，
+     *     修复语句
+     * }
+     */
+    public String CompareDb(Connection conn1, Connection conn2){
+
+        try{
+
+            MySQLDatabaseInspector mySQLDatabaseInspector1 = new MySQLDatabaseInspector(conn1,"test1");
+            MySQLDatabaseInspector.ObjectResult objectList1 = mySQLDatabaseInspector1.getDatabaseObjects(MySQLDatabaseInspector.ObjectType.TABLE, MySQLDatabaseInspector.ColumnMode.BRIEF,false);
+            MySQLDatabaseInspector mySQLDatabaseInspector2 = new MySQLDatabaseInspector(conn2,"test2");
+            MySQLDatabaseInspector.ObjectResult objectList2 = mySQLDatabaseInspector2.getDatabaseObjects(MySQLDatabaseInspector.ObjectType.TABLE, MySQLDatabaseInspector.ColumnMode.BRIEF,false);
+
+
+
+            // 2.比较两个库的对象,得到两个库共有的对象和各自独有的对象
+            if(objectList1.getData().size()!=objectList2.getData().size()){
+
+            }
+
+        }catch (SQLException e){
+            Error("数据库查询错误:"+e.getMessage());
+        }
+
+        // 3.获取两个库的对象的差异
+
+        // 4.根据（3）中对象的差异类型生成sql语句
+
+        // 5.对生成语句的检查，排除语句顺序对影响的误判，以及空语句的排查。
+        return "PASS";
     }
 
     private CompareTable transForm(Map<String, Object> data){
@@ -417,7 +508,7 @@ public class VerifyClient {
     }
 
     /**
-     * 使用Map建立索引：主键 -> Map对象
+     * 使用Map建立索引：主键 -> Map对象（只有主键唯一的时候可以用
      */
     public static <T> Map<T, Map<String, Object>> createIndex(
             List<Map<String, Object>> list,
@@ -429,6 +520,29 @@ public class VerifyClient {
             if (map.containsKey(propertyName)) {
                 T key = valueExtractor.apply(map);
                 index.put(key, map);
+            }
+        }
+        return index;
+    }
+
+    public static Map<String, Map<String, Object>> createIndexWithMultiKeys(List<Map<String, Object>> list) {
+
+        Map<String, Map<String, Object>> index = new HashMap<>();
+        String delimiter = "|"; // 使用分隔符
+
+        for (Map<String, Object> map : list) {
+            // 检查是否包含所有需要的键
+            boolean hasAllKeys = PRIMARY_KEYS.stream().allMatch(map::containsKey);
+            if (hasAllKeys) {
+                // 构建复合键字符串
+                StringBuilder compositeKey = new StringBuilder();
+                for (String keyProp : PRIMARY_KEYS) {
+                    if (compositeKey.length() > 0) {
+                        compositeKey.append(delimiter);
+                    }
+                    compositeKey.append(map.get(keyProp));
+                }
+                index.put(compositeKey.toString(), map);
             }
         }
         return index;
@@ -476,7 +590,47 @@ public class VerifyClient {
         throw new IllegalArgumentException("非十六进制字符: " + c);
     }
 
+    private Map<String, List<String>> getDatabaseObjects(Connection conn, String databaseName) throws SQLException {
+        Map<String, List<String>> objects = new HashMap<>();
+
+        DatabaseMetaData metaData = conn.getMetaData();
+
+        // 获取表和视图
+        ResultSet tables = metaData.getTables(databaseName, null, null, new String[]{"TABLE", "VIEW"});
+        List<String> tableList = new ArrayList<>();
+        while (tables.next()) {
+            tableList.add(tables.getString("TABLE_NAME"));
+        }
+        objects.put("tables", tableList);
+        tables.close();
+
+        // 获取存储过程
+        ResultSet procedures = metaData.getProcedures(databaseName, null, null);
+        List<String> procedureList = new ArrayList<>();
+        while (procedures.next()) {
+            procedureList.add(procedures.getString("PROCEDURE_NAME"));
+        }
+        objects.put("procedures", procedureList);
+        procedures.close();
+
+        // 获取函数
+        ResultSet functions = metaData.getFunctions(databaseName, null, null);
+        List<String> functionList = new ArrayList<>();
+        while (functions.next()) {
+            functionList.add(functions.getString("FUNCTION_NAME"));
+        }
+        objects.put("functions", functionList);
+        functions.close();
+
+        return objects;
+    }
+
+
     private void Debug(String obj){
         System.out.println(obj);
+    }
+
+    private void Error(String obj){
+        System.err.println(obj);
     }
 }
