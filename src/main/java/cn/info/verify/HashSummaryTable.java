@@ -1,9 +1,13 @@
 package cn.info.verify;
 
 import lombok.Builder;
+import lombok.Getter;
+import lombok.Setter;
 
 import java.util.Objects;
 
+@Getter
+@Setter
 @Builder
 public class HashSummaryTable {
 
@@ -18,73 +22,11 @@ public class HashSummaryTable {
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof HashSummaryTable that)) return false;
-        return count == that.count && Objects.equals(span, that.span) && Objects.equals(sumPart1, that.sumPart1) && Objects.equals(sumPart2, that.sumPart2) && Objects.equals(sumPart3, that.sumPart3) && Objects.equals(sumPart4, that.sumPart4);
+        return Objects.equals(count, that.count) && Objects.equals(span, that.span) && Objects.equals(sumPart1, that.sumPart1) && Objects.equals(sumPart2, that.sumPart2) && Objects.equals(sumPart3, that.sumPart3) && Objects.equals(sumPart4, that.sumPart4);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(span, count, sumPart1, sumPart2, sumPart3, sumPart4);
-    }
-
-    /**
-     * 获取完整的签名字符串（四部分用逗号连接）
-     */
-    public String getFullSignature() {
-        return sumPart1 + "," + sumPart2 + "," + sumPart3 + "," + sumPart4;
-    }
-
-    /**
-     * 获取签名数组
-     */
-    public Long[] getSignatureArray() {
-        return new Long[]{sumPart1, sumPart2, sumPart3, sumPart4};
-    }
-
-    public String getSpan() {
-        return span;
-    }
-
-    public void setSpan(String span) {
-        this.span = span;
-    }
-
-    public Long getCount() {
-        return count;
-    }
-
-    public void setCount(Long count) {
-        this.count = count;
-    }
-
-    public Long getSumPart1() {
-        return sumPart1;
-    }
-
-    public void setSumPart1(Long sumPart1) {
-        this.sumPart1 = sumPart1;
-    }
-
-    public Long getSumPart2() {
-        return sumPart2;
-    }
-
-    public void setSumPart2(Long sumPart2) {
-        this.sumPart2 = sumPart2;
-    }
-
-    public Long getSumPart3() {
-        return sumPart3;
-    }
-
-    public void setSumPart3(Long sumPart3) {
-        this.sumPart3 = sumPart3;
-    }
-
-    public Long getSumPart4() {
-        return sumPart4;
-    }
-
-    public void setSumPart4(Long sumPart4) {
-        this.sumPart4 = sumPart4;
     }
 }

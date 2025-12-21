@@ -44,7 +44,7 @@ public class VerifyClient {
         //拿主键
         // todo catalog指定库的名字，需要用户输入或者从url中读取
         DatabaseMetaData dbMetaData = conn1.getMetaData();
-        ResultSet set = dbMetaData.getPrimaryKeys("test3",null,table1);
+        ResultSet set = dbMetaData.getPrimaryKeys("test1",null,table1);
         while (set.next()){
             PRIMARY_KEYS.add(set.getString("COLUMN_NAME"));
         }
@@ -55,10 +55,10 @@ public class VerifyClient {
             return "Pass";
         }
 
-        String sql1 = "select * from "+table1;
+        String sql1 = "select * from %s".formatted(table1);
         ResultSet resultSet1 = statement1.executeQuery(sql1);
 
-        String sql2 = "select * from "+table2;
+        String sql2 = "select * from %s".formatted(table2);
         ResultSet resultSet2 = statement2.executeQuery(sql2);
 
         //取数据,并将数据处理成compareTable的格式（大数据量的话这会不会很慢呢,而且会占用很多内存
@@ -168,11 +168,11 @@ public class VerifyClient {
                             if (!first) {
                                 pkBuilder.append("|");
                             }
-                            pkBuilder.append(pkValue.toString());
+                            pkBuilder.append(pkValue);
                             first = false;
                         }
                     }
-                    if (pkBuilder.length() > 0) {
+                    if (!pkBuilder.isEmpty()) {
                         pkSet1.add(pkBuilder.toString());
                     }
                 }
@@ -203,11 +203,11 @@ public class VerifyClient {
                             if (!first) {
                                 pkBuilder.append("|");
                             }
-                            pkBuilder.append(pkValue.toString());
+                            pkBuilder.append(pkValue);
                             first = false;
                         }
                     }
-                    if (pkBuilder.length() > 0) {
+                    if (!pkBuilder.isEmpty()) {
                         pkSet2.add(pkBuilder.toString());
                     }
                 }
@@ -233,9 +233,7 @@ public class VerifyClient {
             for(String obj: common){
                 Map<String,Object> map = index1.get(obj);
                 sql.append("UPDATE ").append(table2).append(" SET ");
-                map.forEach((key, value) -> {
-                    sql.append(key).append(" = '").append(value).append("',");
-                });
+                map.forEach((key, value) -> sql.append(key).append(" = '").append(value).append("',"));
                 //删除末尾的逗号
                 sql.deleteCharAt(sql.length()-1);
                 //这种写法只能适配一个主键，如果组合主键的话还要改
@@ -254,15 +252,13 @@ public class VerifyClient {
             //先拼接列名
             String str = extra1.iterator().next();
             map = index1.get(str);
-            map.forEach((key,value) -> {
-                keySql.append(key).append(",");
-            });
+            map.forEach((key,value) -> keySql.append(key).append(","));
             // 删除末尾多余的逗号
-            if (valueSql.length() > 0) {
-                valueSql.deleteCharAt(valueSql.length() - 1);
+            if (!keySql.isEmpty()) {
+                keySql.deleteCharAt(keySql.length() - 1);
             }
 
-            sql.append(valueSql).append(") VALUES ");
+            sql.append(keySql).append(") VALUES ");
             //sql.append(String.join(",",COMPARE_COLUMNS)).append(") VALUES ");
 
             //再拼接values
@@ -270,17 +266,15 @@ public class VerifyClient {
                 map = index1.get(obj);
 
                 valueSql.append("(");
-                map.forEach((key,value) -> {
-                    valueSql.append("'").append(value).append("',");
-                });
+                map.forEach((key,value) -> valueSql.append("'").append(value).append("',"));
 
                 // 删除末尾多余的逗号
-                if (valueSql.length() > 0) {
+                if (!valueSql.isEmpty()) {
                     valueSql.deleteCharAt(valueSql.length() - 1);
                 }
                 valueSql.append("),");
             }
-            if (valueSql.length() > 0) {
+            if (!valueSql.isEmpty()) {
                 valueSql.deleteCharAt(valueSql.length() - 1);
             }
 
@@ -331,7 +325,7 @@ public class VerifyClient {
 
 
             // 2.比较两个库的对象,得到两个库共有的对象和各自独有的对象
-            if(objectList1.getData().size()!=objectList2.getData().size()){
+            if(objectList1.data().size()!=objectList2.data().size()){
 
             }
 
@@ -368,28 +362,12 @@ public class VerifyClient {
     }
 
     /**
-     * 对数据的全量比较
-     * @param list1
-     * @param list2
-     */
-    private void CompareData(List<Map<String,Object>> list1, List<Map<String,Object>> list2) {
-
-        //数据的处理，得到类似于mysql中的comparetable的东西
-
-
-    }
-
-    /**
      * 判断CheckSum是否相同
-     * @param statement1
-     * @param statement2
-     * @param table1
-     * @param table2
      */
     private boolean CheckSum(Statement statement1, Statement statement2, String table1, String table2) throws SQLException {
 
-        String checkSql1 = "checksum table "+table1;
-        String checkSql2 = "checksum table "+table2;
+        String checkSql1 = "checksum table %s".formatted(table1);
+        String checkSql2 = "checksum table %s".formatted(table2);
 
         long checksum1 = 0;
         long checksum2 = 0;
@@ -421,7 +399,7 @@ public class VerifyClient {
         return md5ToHex(concat.toString());
     }
 
-    private static String md5ToHex(String input) throws NoSuchAlgorithmException {
+    private static String md5ToHex(String input){
         //MessageDigest md = MessageDigest.getInstance("MD5");
         //用单例模式能更快吗
         MessageDigest md = MD5_DIGEST.get();
@@ -468,13 +446,13 @@ public class VerifyClient {
      */
     private static Map<String, Object> extractPkValues(Map<String, Object> data) {
         Map<String, Object> pkValues = new LinkedHashMap<>();
-        for (String pk : VerifyClient.PRIMARY_KEYS) {
+        for (String pk : PRIMARY_KEYS) {
             pkValues.put(pk, data.get(pk));
         }
         return pkValues;
     }
 
-    public static List<HashSummaryTable> calculateSummary(List<CompareTable> compareTableList) throws SQLException {
+    public static List<HashSummaryTable> calculateSummary(List<CompareTable> compareTableList){
 
         Map<String, GroupData> groupMap = new HashMap<>();
 
@@ -507,23 +485,6 @@ public class VerifyClient {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * 使用Map建立索引：主键 -> Map对象（只有主键唯一的时候可以用
-     */
-    public static <T> Map<T, Map<String, Object>> createIndex(
-            List<Map<String, Object>> list,
-            String propertyName,
-            Function<Map<String, Object>, T> valueExtractor) {
-
-        Map<T, Map<String, Object>> index = new HashMap<>();
-        for (Map<String, Object> map : list) {
-            if (map.containsKey(propertyName)) {
-                T key = valueExtractor.apply(map);
-                index.put(key, map);
-            }
-        }
-        return index;
-    }
 
     public static Map<String, Map<String, Object>> createIndexWithMultiKeys(List<Map<String, Object>> list) {
 
@@ -537,7 +498,7 @@ public class VerifyClient {
                 // 构建复合键字符串
                 StringBuilder compositeKey = new StringBuilder();
                 for (String keyProp : PRIMARY_KEYS) {
-                    if (compositeKey.length() > 0) {
+                    if (!compositeKey.isEmpty()) {
                         compositeKey.append(delimiter);
                     }
                     compositeKey.append(map.get(keyProp));

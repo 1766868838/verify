@@ -75,7 +75,6 @@ public class MySQLDatabaseInspector {
             case FUNCTION -> fetchFunctions(columnMode, getColumnNames, needBacktick);
             case EVENT -> fetchEvents(columnMode, getColumnNames, needBacktick);
             case GRANT -> fetchGrants(columnMode, getColumnNames, needBacktick);
-            default -> throw new IllegalArgumentException("未知的对象类型: " + type);
         };
     }
 
@@ -724,23 +723,7 @@ public class MySQLDatabaseInspector {
     /**
      * 返回结果包装类
      */
-    public static class ObjectResult {
-        private final List<String> columnNames;
-        private final List<Map<String, Object>> data;
-
-        public ObjectResult(List<String> columnNames, List<Map<String, Object>> data) {
-            this.columnNames = columnNames;
-            this.data = data;
-        }
-
-        public List<String> getColumnNames() {
-            return columnNames;
-        }
-
-        public List<Map<String, Object>> getData() {
-            return data;
-        }
-
+    public record ObjectResult(List<String> columnNames, List<Map<String, Object>> data) {
         public boolean hasColumnNames() {
             return columnNames != null && !columnNames.isEmpty();
         }
