@@ -8,7 +8,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.util.*;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Component
@@ -42,9 +41,8 @@ public class VerifyClient {
         Statement statement2 = conn2.createStatement();
 
         //拿主键
-        // todo catalog指定库的名字，需要用户输入或者从url中读取
         DatabaseMetaData dbMetaData = conn1.getMetaData();
-        ResultSet set = dbMetaData.getPrimaryKeys("test1",null,table1);
+        ResultSet set = dbMetaData.getPrimaryKeys(conn1.getCatalog(), conn1.getSchema(),table1);
         while (set.next()){
             PRIMARY_KEYS.add(set.getString("COLUMN_NAME"));
         }
@@ -63,7 +61,6 @@ public class VerifyClient {
 
         //取数据,并将数据处理成compareTable的格式（大数据量的话这会不会很慢呢,而且会占用很多内存
 
-        List<Map<String,Object>> list1 = new ArrayList<>();
         List<Map<String, Object>> allMaps = new ArrayList<>();
         //拿列名
         ResultSetMetaData metaData = resultSet1.getMetaData(); //获取列集
@@ -79,17 +76,16 @@ public class VerifyClient {
             for(int i = 1 ;i<=columnCount;i++){
                 map1.put(COMPARE_COLUMNS.get(i-1),resultSet1.getString(i));
             }
-            list1.add(map1);
             allMaps.add(map1);
         }
-
+        List<Map<String,Object>> list1 = new ArrayList<>(allMaps);
         // 并行转换
-        List<CompareTable> transformedList = allMaps.parallelStream()
+        List<CompareTable> compareTableList1 = allMaps.parallelStream()
                 .map(this::transForm)
                 .toList();
 
         allMaps.clear();
-        List<CompareTable> compareTableList1 = new ArrayList<>(transformedList);
+        //List<CompareTable> compareTableList1 = new ArrayList<>(transformedList);
 
         //不需要获取list2的原数据
         //List<Map<String,Object>> list2 = new ArrayList<>();
@@ -103,15 +99,14 @@ public class VerifyClient {
             allMaps.add(map2);
         }
         // 并行转换
-        List<CompareTable> transformedList2 = allMaps.parallelStream()
+        List<CompareTable> compareTableList2 = allMaps.parallelStream()
                 .map(this::transForm)
                 .toList();
 
-        List<CompareTable> compareTableList2 = new ArrayList<>(transformedList2);
+        //List<CompareTable> compareTableList2 = new ArrayList<>(transformedList2);
 
 
-        //todo 这里使用的是唯一的主键，如果主键不唯一还需要处理
-        //如果是主键字符串拼接，这里是比较简单的
+        //如果是主键字符串拼接，这里还算比较简单的
         //Map<String,Map<String,Object>> index1 = createIndex(list1,PRIMARY_KEYS.get(0),map -> (String) map.get(PRIMARY_KEYS.get(0)) );
         Map<String,Map<String,Object>> index1 = createIndexWithMultiKeys(list1);
 
@@ -126,6 +121,7 @@ public class VerifyClient {
         statement2.close();
 
         //如果把上面的compareTable插入到数据库里，这里通过order by得到分组结果也是很方便的，后续还有通过span反找compareTableList的pkValue在代码上是简单的
+        //这里可以把四个sumPart合起来比较，应该会快一点
         List<HashSummaryTable> hashSummaryTableList1 = calculateSummary(compareTableList1);
         List<HashSummaryTable> hashSummaryTableList2 = calculateSummary(compareTableList2);
 

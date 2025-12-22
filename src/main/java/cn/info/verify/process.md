@@ -42,14 +42,23 @@
 获取详细行数据（按span组）
 1. 计算比较checksum，二者相同直接pass。mysql和oracle支持这个方法。
 
-2. 获取使用的索引，去除索引的引号。
+2. 获取使用的索引，去除索引的引号。    我直接用的主键
 
-3. 若客户端二进制日志开启（sql_log_bin==1），则将其关闭。
+3. 若客户端二进制日志开启（sql_log_bin==1），则将其关闭。    没改二进制日志
 
-4. 为每个待比较表创建临时比较表。
+4. 为每个待比较表创建临时比较表。      
+    ```
+    CREATE TEMPORARY TABLE {db}.{compare_tbl} (
+        compare_sign binary(16) NOT NULL,
+        pk_hash binary(16) NOT NULL,
+        {pkdef}
+        span binary({span_key_size}) NOT NULL,
+        INDEX span_key (span, pk_hash)) ENGINE=MyISAM
+   ```
+    没创临时表，强制使用主键判断
     得到两张表的非空且唯一索引的列表，若用户提供索引，判断用户提供的索引是否在这两张表中，否则使用主键。生成包含数据库名称，比较表名称，主键定义，跨度键大小的临时比较表数据。
     将表的autocommit设为1
-5. 对每个表通过INSERT语句计算行的MD5哈希值并填充比较表。
+5. 对两张表通过INSERT语句计算行的MD5哈希值并填充比较表。      没设置锁，直接全部读到内存中操作
     为原表设置读锁，为临时比较表设置写锁，使用设置的模板生成比较表名称和insert语句，insert语句中包含数据库名称，比较表名称，列名字符串，主键字符串，原表名称，跨度键大小。
    ```
    INSERT INTO {db}.{compare_tbl}

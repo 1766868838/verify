@@ -1,9 +1,16 @@
 package cn.info.verify;
 
+import lombok.Getter;
+import lombok.Setter;
+import org.springframework.stereotype.Service;
+
 import java.util.Map;
 
+@Setter
+@Getter
 public class CompareTable {
     private String compareSign;  // 所有字段的MD5
+    private String pk_hash;  // 主键的MD5
     private Map<String, Object> pkValues;  // 主键字段值
     private String span;         // span值
 
@@ -13,20 +20,12 @@ public class CompareTable {
         this.pkValues = pkValues;
         this.span = span;
     }
-
-    public String getCompareSign() { return compareSign; }
-    public Map<String, Object> getPkValues() { return pkValues; }
-    public String getSpan() { return span; }
-
-    public void setCompareSign(String compareSign) {
+    public CompareTable(String compareSign,String pk_hash,
+                        Map<String, Object> pkValues, String span) {
         this.compareSign = compareSign;
-    }
-
-    public void setPkValues(Map<String, Object> pkValues) {
+        this.pk_hash = pk_hash;
         this.pkValues = pkValues;
-    }
-
-    public void setSpan(String span) {
         this.span = span;
     }
+    public CompareTable(){}
 }
