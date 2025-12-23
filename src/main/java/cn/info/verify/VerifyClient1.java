@@ -26,19 +26,19 @@ public class VerifyClient1 {
     CREATE TEMPORARY TABLE %s.%s (
         compare_sign binary(16) NOT NULL,
         pk_hash binary(16) NOT NULL,
-        %s,
         span binary(%d) NOT NULL,
+        %s,
         INDEX span_key (span, pk_hash));
     """;
 
     private static final String INSERT_TABLE_TEMPLATE = """
     INSERT INTO %s.%s
-       (compare_sign, pk_hash, %s, span)
+       (compare_sign, pk_hash, span, %s)
        SELECT
        UNHEX(MD5(CONCAT_WS('/', %s))),
        UNHEX(MD5(CONCAT_WS('/', %s))),
-       %s,
-       UNHEX(LEFT(MD5(CONCAT_WS('/', %s)), %d))
+       UNHEX(LEFT(MD5(CONCAT_WS('/', %s)), %d)),
+       %s
        FROM %s.%s;
     """;
 
@@ -56,6 +56,12 @@ public class VerifyClient1 {
         SELECT * FROM %s.%s
         WHERE span = UNHEX('%s') ORDER BY pk_hash
     """;
+
+    private static final String DIFF_COMPARE_BATCH = """
+        SELECT * FROM %s.%s
+            WHERE span IN (%s) ORDER BY span, pk_hash
+    """;
+
 
     private static final String QUERY_COMPARE_SPAN = """
         SELECT * FROM %s.%s WHERE %s
@@ -143,60 +149,72 @@ public class VerifyClient1 {
                 Set<String> extra2 = new HashSet<>(tableDiffs2);
                 Set<String> extra1 = new HashSet<>(tableDiffs1);
 
-
                 common.retainAll(extra2);
-
                 extra1.removeAll(common);
-
                 extra2.removeAll(common);
-
 
                 List<SpanData> fullSpanData1 = new ArrayList<>();
                 List<SpanData> fullSpanData2 = new ArrayList<>();
 
                 List<Map<String,Object>> changedIn1 = new ArrayList<>();
                 List<Map<String,Object>> extraIn1 = new ArrayList<>();
-                List<Map<String,Object>> changedIn2 = new ArrayList<>();
                 List<Map<String,Object>> extraIn2 = new ArrayList<>();
 
-                //这里是依次查询每条结果获取数据的，后续可以考虑分批的批量查询
+                conn1.setAutoCommit(false);
+                conn2.setAutoCommit(false);
+
+                // 这里是依次查询每条结果获取数据的，后续可以考虑分批的批量查询
+
+                // common是span的集合，span来自于pk_hash，即使span相同，pk_hash很可能是不同的，pk_hash的变动会影响行数据的hash，反之则不一定
+                // mysql先是判断了行数据的hash，在判断pk_hash具体是多了，不变还是少了，如果要准确找出所有更改行，这是必须的
+
                 if(common.size() > 0){
                     for(String str: common){
-                        ResultSet resultSet = statement1.executeQuery(String.format(DIFF_COMPARE,dbName1,compareTblName,str));
-                        List<String[]> spanRowList = new ArrayList<>();
-                        String[] spanRow = new String[3+PRIMARY_KEYS.size()];
-                        Set<RowSignature> cmpSigns = new HashSet<>();
-                        while(resultSet.next()){
-                            for(int i =1; i<=3+PRIMARY_KEYS.size();i++){
-                                spanRow[i-1] = resultSet.getString(i);
+                        try(PreparedStatement statement = conn1.prepareStatement(String.format(DIFF_COMPARE,dbName1,compareTblName,str));){
+                            statement.setFetchSize(100);
+                            statement.setFetchDirection(ResultSet.FETCH_FORWARD);
+                            try(ResultSet resultSet = statement.executeQuery();){
+                                List<String[]> spanRowList = new ArrayList<>();
+                                String[] spanRow = new String[3+PRIMARY_KEYS.size()];
+                                Set<RowSignature> cmpSigns = new HashSet<>();
+                                while(resultSet.next()){
+                                    for(int i =1; i<=3+PRIMARY_KEYS.size();i++){
+                                        spanRow[i-1] = resultSet.getString(i);
+                                    }
+                                    spanRowList.add(spanRow);
+                                    RowSignature signature = new RowSignature(
+                                            resultSet.getString(1),  // compare_sign
+                                            resultSet.getString(2)   // pk_hash
+                                    );
+                                    cmpSigns.add(signature);
+                                }
+                                fullSpanData1.add(new SpanData(spanRowList,cmpSigns));
                             }
-                            spanRowList.add(spanRow);
-                            RowSignature signature = new RowSignature(
-                                    resultSet.getString(1),  // compare_sign
-                                    resultSet.getString(2)   // pk_hash
-                            );
-                            cmpSigns.add(signature);
                         }
-                        fullSpanData1.add(new SpanData(spanRowList,cmpSigns));
                     }
 
                     for(String str: common){
-                        ResultSet resultSet = statement2.executeQuery(String.format(DIFF_COMPARE,dbName2,compareTblName,str));
-                        List<String[]> spanRowList = new ArrayList<>();
-                        String[] spanRow = new String[3+PRIMARY_KEYS.size()];
-                        Set<RowSignature> cmpSigns = new HashSet<>();
-                        while(resultSet.next()){
-                            for(int i =1; i<=3+PRIMARY_KEYS.size();i++){
-                                spanRow[i-1] = resultSet.getString(i);
+                        try(PreparedStatement statement = conn2.prepareStatement(String.format(DIFF_COMPARE,dbName2,compareTblName,str));){
+                            statement.setFetchSize(100);
+                            statement.setFetchDirection(ResultSet.FETCH_FORWARD);
+                            try(ResultSet resultSet = statement.executeQuery();){
+                                List<String[]> spanRowList = new ArrayList<>();
+                                String[] spanRow = new String[3+PRIMARY_KEYS.size()];
+                                Set<RowSignature> cmpSigns = new HashSet<>();
+                                while(resultSet.next()){
+                                    for(int i =1; i<=3+PRIMARY_KEYS.size();i++){
+                                        spanRow[i-1] = resultSet.getString(i);
+                                    }
+                                    spanRowList.add(spanRow);
+                                    RowSignature signature = new RowSignature(
+                                            resultSet.getString(1),  // compare_sign
+                                            resultSet.getString(2)   // pk_hash
+                                    );
+                                    cmpSigns.add(signature);
+                                }
+                                fullSpanData2.add(new SpanData(spanRowList,cmpSigns));
                             }
-                            spanRowList.add(spanRow);
-                            RowSignature signature = new RowSignature(
-                                    resultSet.getString(1),  // compare_sign
-                                    resultSet.getString(2)   // pk_hash
-                            );
-                            cmpSigns.add(signature);
                         }
-                        fullSpanData2.add(new SpanData(spanRowList,cmpSigns));
                     }
 
                     for (int pos = 0; pos < fullSpanData1.size(); pos++) {
@@ -213,7 +231,7 @@ public class VerifyClient1 {
 
                         for(String[] res :spanData1.getRowData()){
                             if(diffRowsSign1.contains(new RowSignature(res[0],res[1]))){
-                                String[] pks = Arrays.copyOfRange(res, 2, res.length - 1);
+                                String[] pks = Arrays.copyOfRange(res, 3, res.length);
 
                                 StringBuilder whereClause = new StringBuilder();
                                 for (int i = 0; i < PRIMARY_KEYS.size(); i++) {
@@ -232,27 +250,26 @@ public class VerifyClient1 {
                                         table1,
                                         whereClauseStr);
 
-                                ResultSet needChangeRes = statement1.executeQuery(query);
+                                try(ResultSet needChangeRes = statement1.executeQuery(query)){
+                                    // 处理查询结果并分类
+                                    if (needChangeRes.next()) {
+                                        Map<String, Object> rowData = convertResultSetToMap(needChangeRes);
 
-                                // 处理查询结果并分类
-                                if (needChangeRes.next()) {
-                                    Map<String, Object> rowData = convertResultSetToMap(needChangeRes);
-
-                                    if (diffPkHash2.contains(res[1])) {
-                                        // 存储原始变更行（需要UPDATE）
-                                        changedIn1.add(rowData);
-                                    } else {
-                                        // 存储原始额外行（需要insert）
-                                        extraIn1.add(rowData);
+                                        if (diffPkHash2.contains(res[1])) {
+                                            // 存储原始变更行（需要UPDATE）
+                                            changedIn1.add(rowData);
+                                        } else {
+                                            // 存储原始额外行（需要insert）
+                                            extraIn1.add(rowData);
+                                        }
                                     }
                                 }
-
                             }
                         }
 
                         for(String[] res :spanData2.getRowData()){
                             if(diffRowsSign2.contains(new RowSignature(res[0],res[1]))){
-                                String[] pks = Arrays.copyOfRange(res, 2, res.length - 1);
+                                String[] pks = Arrays.copyOfRange(res, 3, res.length );
 
                                 StringBuilder whereClause = new StringBuilder();
                                 for (int i = 0; i < PRIMARY_KEYS.size(); i++) {
@@ -271,21 +288,17 @@ public class VerifyClient1 {
                                         table2,
                                         whereClauseStr);
 
-                                ResultSet needChangeRes = statement2.executeQuery(query);
+                                try(ResultSet needChangeRes = statement2.executeQuery(query);){
+                                    // 处理查询结果并分类
+                                    if (needChangeRes.next()) {
+                                        Map<String, Object> rowData = convertResultSetToMap(needChangeRes);
 
-                                // 处理查询结果并分类
-                                if (needChangeRes.next()) {
-                                    Map<String, Object> rowData = convertResultSetToMap(needChangeRes);
-
-                                    if (diffPkHash1.contains(res[1])) {
-                                        // 存储原始变更行（需要UPDATE）
-                                        changedIn2.add(rowData);
-                                    } else {
-                                        // 存储原始额外行（需要DELETE）
-                                        extraIn2.add(rowData);
+                                        if (!diffPkHash1.contains(res[1])) {
+                                            // 存储原始行（需要DELETE）
+                                            extraIn2.add(rowData);
+                                        }
                                     }
                                 }
-
                             }
                         }
 
@@ -302,7 +315,7 @@ public class VerifyClient1 {
                     extraIn2.addAll(resultList);
                 }
 
-                // 如果changedIn1不为空 表示需要table2update，extraIn1 需要table2 insert， extraIn2 需要table2 delete
+                // 如果changedIn1不为空 表示需要 update table2 ，extraIn1 需要table2 insert， extraIn2 需要table2 delete
                 if(!changedIn1.isEmpty() || !extraIn1.isEmpty() || !extraIn2.isEmpty()){
                     List<String> fixSqlStatements = generateFixSqlStatements(changedIn1, extraIn1, extraIn2,table2);
 
@@ -312,6 +325,9 @@ public class VerifyClient1 {
                 }
 
 
+                resultSet1.close();
+                statement1.close();
+                statement2.close();
 
             }
 
@@ -472,22 +488,23 @@ public class VerifyClient1 {
         List<String[]> allPkValues = new ArrayList<>();
 
         try {
-            // 第一阶段：收集所有主键值
+            String cateLog = statement.getConnection().getCatalog();
+            String compareTable = "compare_"+tableName;
+            // 收集所有主键值
             for (String span : extraSpans) {
-                String diffQuery = String.format(DIFF_COMPARE, "test3", "compare_user", span);
-                ResultSet spanResultSet = statement.executeQuery(diffQuery);
-
-                while (spanResultSet.next()) {
-                    String[] pkValues = new String[PRIMARY_KEYS.size()];
-                    for (int i = 0; i < PRIMARY_KEYS.size(); i++) {
-                        pkValues[i] = spanResultSet.getString(3 + i);
+                String diffQuery = String.format(DIFF_COMPARE, cateLog, compareTable, span);
+                try(ResultSet spanResultSet = statement.executeQuery(diffQuery);){
+                    while (spanResultSet.next()) {
+                        String[] pkValues = new String[PRIMARY_KEYS.size()];
+                        for (int i = 0; i < PRIMARY_KEYS.size(); i++) {
+                            pkValues[i] = spanResultSet.getString(4 + i);
+                        }
+                        allPkValues.add(pkValues);
                     }
-                    allPkValues.add(pkValues);
                 }
-                spanResultSet.close();
             }
 
-            // 第二阶段：使用收集到的主键值查询原始表
+            // 使用收集到的主键值查询原始表
             for (String[] pkValues : allPkValues) {
                 StringBuilder whereClause = new StringBuilder();
                 for (int i = 0; i < PRIMARY_KEYS.size(); i++) {
@@ -505,12 +522,12 @@ public class VerifyClient1 {
                         tableName,
                         whereClause.toString());
 
-                ResultSet originalResultSet = statement.executeQuery(originalQuery);
-                if (originalResultSet.next()) {
-                    Map<String, Object> rowData = convertResultSetToMap(originalResultSet);
-                    resultList.add(rowData);
+                try(ResultSet originalResultSet = statement.executeQuery(originalQuery);){
+                    if (originalResultSet.next()) {
+                        Map<String, Object> rowData = convertResultSetToMap(originalResultSet);
+                        resultList.add(rowData);
+                    }
                 }
-                originalResultSet.close();
             }
 
         } catch (SQLException e) {
@@ -519,25 +536,12 @@ public class VerifyClient1 {
 
         return resultList;
     }
-    @Getter
-    @Setter
-    class Tuple<T1, T2> {
-        public final T1 first;
-        public final T2 second;
-        public Tuple(T1 first, T2 second) {
-            this.first = first;
-            this.second = second;
-        }
-        @Override
-        public String toString() {
-            return "(" + first + ", " + second + ")";
-        }
-    }
 
     private Map<String, Object> convertResultSetToMap(ResultSet rs) throws SQLException {
         Map<String, Object> rowData = new HashMap<>();
         ResultSetMetaData metaData = rs.getMetaData();
         int columnCount = metaData.getColumnCount();
+
 
         for (int i = 1; i <= columnCount; i++) {
             rowData.put(metaData.getColumnName(i), rs.getObject(i));
@@ -565,10 +569,6 @@ public class VerifyClient1 {
      * 2.对两张表通过INSERT语句计算行的MD5哈希值并填充比较表
      * 3.对每个表将MD5哈希值拆分为四部分进行求和，并将哈希值转换为十进制以进行数值求和。
      * 此汇总查询还会按主键哈希前4位形成的跨度列对比较表的行进行分组，最多可分为16^4 = 65536组
-     * @param statement
-     * @param dbName
-     * @param compareTblName
-     * @param tableName
      * @return 汇总表
      */
     private List<String[]> makeSumRows(Statement statement,String dbName, String compareTblName, String tableName) throws SQLException {
@@ -579,8 +579,8 @@ public class VerifyClient1 {
         String tempSql1 = String.format(COMPARE_TABLE_TEMPLATE,
                 dbName,
                 compareTblName,
-                pkDef,
-                SPAN_KEY_SIZE/2);
+                SPAN_KEY_SIZE/2,
+                pkDef);
 
         statement.execute(tempSql1);
 
@@ -595,33 +595,32 @@ public class VerifyClient1 {
                 colStr,
                 pkStr,
                 pkStr,
-                pkStr,
                 SPAN_KEY_SIZE,
+                pkStr,
                 dbName,
                 tableName);
 
         statement.execute(tempSql1);
 
-        tempSql1 = String.format(SUM_TABLE_TEMPLATE,
-                dbName,
-                compareTblName);
+        tempSql1 = String.format(SUM_TABLE_TEMPLATE, dbName, compareTblName);
 
-        ResultSet resultSet = statement.executeQuery(tempSql1);
+        try (PreparedStatement preparedStatement = statement.getConnection().prepareStatement(tempSql1)) {
+            preparedStatement.setFetchSize(1000);
 
-        List<Map<String, Object>> allMaps = new ArrayList<>();
+            try (ResultSet resultSet = preparedStatement.executeQuery()) {
+                List<String[]> objectList = new ArrayList<>();
 
-        List<String[]> objectList = new ArrayList<>();
+                while (resultSet.next()) {
+                    String[] objects = new String[3];
+                    for (int i = 0; i < 3; i++) {
+                        objects[i] = resultSet.getString(i + 1);
+                    }
+                    objectList.add(objects);
+                }
 
-        while (resultSet.next()) {
-            String[] objects = new String[3];
-
-            for(int i = 0 ;i<SUM_TABLE_COLUMNS.size();i++){
-                objects[i] = resultSet.getString(i+1);
+                return objectList;
             }
-            objectList.add(objects);
         }
-
-        return objectList;
     }
 
     private String buildIndexDefinition() {
@@ -691,26 +690,6 @@ public class VerifyClient1 {
         return "PASS";
     }
 
-    private CompareTable transForm(Map<String, Object> data){
-        try {
-            // 生成所有字段的compare_sign
-            String compareSign = generateCompareSign(data);
-
-            // 生成主键字段的pk_hash,这个属性后续用不到了
-            String pkHash = generatePkHash(data);
-
-            // 提取主键字段值
-            Map<String, Object> pkValues = extractPkValues(data);
-
-            // 生成span
-            String span = pkHash.substring(0, Math.min(SPAN_KEY_SIZE, pkHash.length()));
-            return new CompareTable(compareSign, pkValues, span);
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("MD5算法不可用", e);
-        }
-
-    }
-
     /**
      * 判断CheckSum是否相同
      */
@@ -737,168 +716,13 @@ public class VerifyClient1 {
 
     }
 
-    private static String generateCompareSign(Map<String, Object> data) throws NoSuchAlgorithmException {
-
-        StringBuilder concat = new StringBuilder();
-        for (String column : COMPARE_COLUMNS) {
-            Object value = data.get(column);
-            if (value != null) {
-                concat.append(value);
-            }
+    private static <T> List<List<T>> partitionList(List<T> list, int batchSize) {
+        List<List<T>> batches = new ArrayList<>();
+        for (int i = 0; i < list.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, list.size());
+            batches.add(list.subList(i, end));
         }
-        return md5ToHex(concat.toString());
-    }
-
-    private static String md5ToHex(String input){
-        //MessageDigest md = MessageDigest.getInstance("MD5");
-        //用单例模式能更快吗
-        MessageDigest md = MD5_DIGEST.get();
-        byte[] digest = md.digest(input.getBytes(UTF_8));
-        return bytesToHex(digest);
-    }
-
-    // ThreadLocal 缓存 MessageDigest 实例
-    private static final ThreadLocal<MessageDigest> MD5_DIGEST = ThreadLocal.withInitial(() -> {
-        try {
-            return MessageDigest.getInstance("MD5");
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException(e);
-        }
-    });
-
-    //将原先使用的String.format改为了从字符数组索引，并用位运算计算下标
-    private static String bytesToHex(byte[] bytes) {
-        final int length = bytes.length;
-        final char[] hexChars = new char[length << 1];
-        for (int i = 0; i < length; i++) {
-            hexChars[i << 1] = HEX_ARRAY[(0xF0 & bytes[i]) >>> 4];
-            hexChars[(i << 1) + 1] = HEX_ARRAY[0x0F & bytes[i]];
-        }
-        return new String(hexChars);
-    }
-
-    private static String generatePkHash(Map<String, Object> data)
-            throws NoSuchAlgorithmException {
-
-        StringBuilder concat = new StringBuilder();
-        for (String pk : PRIMARY_KEYS) {
-            Object value = data.get(pk);
-            if (value != null) {
-                concat.append(value);
-            }
-        }
-
-        return md5ToHex(concat.toString());
-    }
-
-    /**
-     * 提取主键字段值
-     */
-    private static Map<String, Object> extractPkValues(Map<String, Object> data) {
-        Map<String, Object> pkValues = new LinkedHashMap<>();
-        for (String pk : PRIMARY_KEYS) {
-            pkValues.put(pk, data.get(pk));
-        }
-        return pkValues;
-    }
-
-    public static List<HashSummaryTable> calculateSummary(List<CompareTable> compareTableList){
-
-        Map<String, GroupData> groupMap = new HashMap<>();
-
-        for (CompareTable compareTable : compareTableList) {
-            String spanHex = compareTable.getSpan();
-            String compareSignHex = compareTable.getCompareSign();
-
-            // 获取或创建分组
-            GroupData group = groupMap.computeIfAbsent(spanHex,
-                    k -> new GroupData(spanHex));
-
-            // 更新分组统计
-            group.incrementCount();
-
-            // 计算四部分的和
-            Long[] parts = splitAndSumHash(compareSignHex);
-            group.addToSums(parts);
-        }
-
-        // 转换为HashSummaryTable
-        return groupMap.values().stream()
-                .map(group -> HashSummaryTable.builder()
-                        .span(group.spanHex)
-                        .count(group.count)
-                        .sumPart1(group.sum1)
-                        .sumPart2(group.sum2)
-                        .sumPart3(group.sum3)
-                        .sumPart4(group.sum4)
-                        .build())
-                .collect(Collectors.toList());
-    }
-
-
-    public static Map<String, Map<String, Object>> createIndexWithMultiKeys(List<Map<String, Object>> list) {
-
-        Map<String, Map<String, Object>> index = new HashMap<>();
-        String delimiter = "|"; // 使用分隔符
-
-        for (Map<String, Object> map : list) {
-            // 检查是否包含所有需要的键
-            boolean hasAllKeys = PRIMARY_KEYS.stream().allMatch(map::containsKey);
-            if (hasAllKeys) {
-                // 构建复合键字符串
-                StringBuilder compositeKey = new StringBuilder();
-                for (String keyProp : PRIMARY_KEYS) {
-                    if (!compositeKey.isEmpty()) {
-                        compositeKey.append(delimiter);
-                    }
-                    compositeKey.append(map.get(keyProp));
-                }
-                index.put(compositeKey.toString(), map);
-            }
-        }
-        return index;
-    }
-
-    /**
-     * 将MD5哈希值拆分为四部分并转换为十进制
-     */
-    private static Long[] splitAndSumHash(String md5Hex) {
-        // MD5是32个十六进制字符，分为4部分，每部分8个字符
-        if (md5Hex.length() != 32) {
-            throw new IllegalArgumentException("MD5哈希值必须是32个字符: " + md5Hex);
-        }
-
-        Long[] parts = new Long[4];
-
-        // 直接操作字符数组，避免substring和Long.parseLong
-        char[] chars = md5Hex.toCharArray();
-
-        parts[0] = parseHexChars(chars, 0, 8);
-        parts[1] = parseHexChars(chars, 8, 16);
-        parts[2] = parseHexChars(chars, 16, 24);
-        parts[3] = parseHexChars(chars, 24, 32);
-
-        return parts;
-    }
-
-    private static long parseHexChars(char[] chars, int start, int end) {
-        long result = 0;
-        for (int i = start; i < end; i++) {
-            char c = chars[i];
-            result = (result << 4) | hexCharToInt(c);
-        }
-        return result;
-    }
-
-    private static int hexCharToInt(char c) {
-        if (c >= '0' && c <= '9') {
-            return c - '0';
-        } else if (c >= 'a' && c <= 'f') {
-            return c - 'a' + 10;
-        } else if (c >= 'A' && c <= 'F') {
-            return c - 'A' + 10;
-        }
-        throw new IllegalArgumentException("非十六进制字符: " + c);
+        return batches;
     }
 
     private Map<String, List<String>> getDatabaseObjects(Connection conn, String databaseName) throws SQLException {
