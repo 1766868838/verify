@@ -309,25 +309,7 @@ public class VerifyClient {
      *     修复语句
      * }
      */
-    public String CompareDb(Connection conn1, Connection conn2){
-
-        try{
-
-            MySQLDatabaseInspector mySQLDatabaseInspector1 = new MySQLDatabaseInspector(conn1,"test1");
-            MySQLDatabaseInspector.ObjectResult objectList1 = mySQLDatabaseInspector1.getDatabaseObjects(MySQLDatabaseInspector.ObjectType.TABLE, MySQLDatabaseInspector.ColumnMode.BRIEF,false);
-            MySQLDatabaseInspector mySQLDatabaseInspector2 = new MySQLDatabaseInspector(conn2,"test2");
-            MySQLDatabaseInspector.ObjectResult objectList2 = mySQLDatabaseInspector2.getDatabaseObjects(MySQLDatabaseInspector.ObjectType.TABLE, MySQLDatabaseInspector.ColumnMode.BRIEF,false);
-
-
-
-            // 2.比较两个库的对象,得到两个库共有的对象和各自独有的对象
-            if(objectList1.data().size()!=objectList2.data().size()){
-
-            }
-
-        }catch (SQLException e){
-            Error("数据库查询错误:"+e.getMessage());
-        }
+    public String CompareDb(Connection conn1, Connection conn2, String dbName1,String dbName2){
 
         // 3.获取两个库的对象的差异
 
@@ -559,6 +541,9 @@ public class VerifyClient {
             tableList.add(tables.getString("TABLE_NAME"));
         }
         objects.put("tables", tableList);
+
+
+
         tables.close();
 
         // 获取存储过程

@@ -1,5 +1,7 @@
 package cn.info.verify;
 
+import org.springframework.boot.SpringApplication;
+
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;

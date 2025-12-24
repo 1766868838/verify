@@ -1,16 +1,14 @@
 package cn.info.verify;
 
-import lombok.Getter;
-import lombok.Setter;
+import com.github.difflib.DiffUtils;
+import com.github.difflib.UnifiedDiffUtils;
+import com.github.difflib.patch.Patch;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Component
 public class VerifyClient1 {
@@ -126,13 +124,16 @@ public class VerifyClient1 {
             Set<String[]> set1 = new HashSet<>(tbl1Hash);
             Set<String[]> set2 = new HashSet<>(tbl2Hash);
 
+            Set<String[]> same = new HashSet<>(set1);
+            same.retainAll(set2);
+
             // 计算仅在set1中的元素
             Set<String[]> in1Not2 = new HashSet<>(set1);
-            in1Not2.removeAll(set2);
+            in1Not2.removeAll(same);
 
             // 计算仅在set2中的元素
             Set<String[]> in2Not1 = new HashSet<>(set2);
-            in2Not1.removeAll(set1);
+            in2Not1.removeAll(same);
 
             if(!in1Not2.isEmpty() || !in2Not1.isEmpty() ){
                 List<String> tableDiffs1 = new ArrayList<>();
@@ -168,6 +169,7 @@ public class VerifyClient1 {
                 // common是span的集合，span来自于pk_hash，即使span相同，pk_hash很可能是不同的，pk_hash的变动会影响行数据的hash，反之则不一定
                 // mysql先是判断了行数据的hash，在判断pk_hash具体是多了，不变还是少了，如果要准确找出所有更改行，这是必须的
 
+
                 if(common.size() > 0){
                     for(String str: common){
                         try(PreparedStatement statement = conn1.prepareStatement(String.format(DIFF_COMPARE,dbName1,compareTblName,str));){
@@ -175,9 +177,9 @@ public class VerifyClient1 {
                             statement.setFetchDirection(ResultSet.FETCH_FORWARD);
                             try(ResultSet resultSet = statement.executeQuery();){
                                 List<String[]> spanRowList = new ArrayList<>();
-                                String[] spanRow = new String[3+PRIMARY_KEYS.size()];
                                 Set<RowSignature> cmpSigns = new HashSet<>();
                                 while(resultSet.next()){
+                                    String[] spanRow = new String[3+PRIMARY_KEYS.size()];
                                     for(int i =1; i<=3+PRIMARY_KEYS.size();i++){
                                         spanRow[i-1] = resultSet.getString(i);
                                     }
@@ -199,9 +201,10 @@ public class VerifyClient1 {
                             statement.setFetchDirection(ResultSet.FETCH_FORWARD);
                             try(ResultSet resultSet = statement.executeQuery();){
                                 List<String[]> spanRowList = new ArrayList<>();
-                                String[] spanRow = new String[3+PRIMARY_KEYS.size()];
                                 Set<RowSignature> cmpSigns = new HashSet<>();
                                 while(resultSet.next()){
+                                    String[] spanRow = new String[3+PRIMARY_KEYS.size()];
+
                                     for(int i =1; i<=3+PRIMARY_KEYS.size();i++){
                                         spanRow[i-1] = resultSet.getString(i);
                                     }
@@ -662,32 +665,234 @@ public class VerifyClient1 {
      *     修复语句
      * }
      */
-    public String CompareDb(Connection conn1, Connection conn2){
+    public List<StructureDiff> CompareDb(Connection conn1, Connection conn2, String dbName1, String dbName2) throws SQLException {
 
-        try{
+        Map<String,Set<String>> objectList1 = getObjectList(conn1,dbName1);
+        Map<String,Set<String>> objectList2 = getObjectList(conn2,dbName2);
+        //Map<String,Set<String>> objectList1 = getObjectList(conn1,dbName1);
+        //Map<String,Set<String>> objectList2 = getObjectList(conn2,dbName2);
 
-            MySQLDatabaseInspector mySQLDatabaseInspector1 = new MySQLDatabaseInspector(conn1,"test1");
-            MySQLDatabaseInspector.ObjectResult objectList1 = mySQLDatabaseInspector1.getDatabaseObjects(MySQLDatabaseInspector.ObjectType.TABLE, MySQLDatabaseInspector.ColumnMode.BRIEF,false);
-            MySQLDatabaseInspector mySQLDatabaseInspector2 = new MySQLDatabaseInspector(conn2,"test2");
-            MySQLDatabaseInspector.ObjectResult objectList2 = mySQLDatabaseInspector2.getDatabaseObjects(MySQLDatabaseInspector.ObjectType.TABLE, MySQLDatabaseInspector.ColumnMode.BRIEF,false);
+        //table create 第二列，procedure第三列，view第二列，function 第三列
+        Set<String> tables1 = objectList1.get("tables");
+        Set<String> tables2 = objectList2.get("tables");
+        StructureDiff tableDiff = compareStructure(conn1, conn2, tables1, tables2, StructureDiff.structureType.TABLE);
+        tableDiff.setType(StructureDiff.structureType.TABLE);
+
+        // 需要先拆分create语句 ，后续 add， drop
+        //List<String> obj1 = getObjectDefinition(conn1,dbName1);
+
+        //比较函数
+        Set<String> functions1 = objectList1.get("functions");
+        Set<String> functions2 = objectList2.get("functions");
+        StructureDiff funcDiff = compareStructure(conn1, conn2, functions1, functions2, StructureDiff.structureType.FUNCTION);
+        funcDiff.setType(StructureDiff.structureType.FUNCTION);
 
 
+        //比较视图
+        Set<String> views1 = objectList1.get("views");
+        Set<String> views2 = objectList2.get("views");
+        StructureDiff viewDiff = compareStructure(conn1, conn2, views1, views2, StructureDiff.structureType.VIEW);
+        viewDiff.setType(StructureDiff.structureType.VIEW);
 
-            // 2.比较两个库的对象,得到两个库共有的对象和各自独有的对象
-            if(objectList1.data().size()!=objectList2.data().size()){
 
-            }
+        //比较存储过程
+        Set<String> prods1 = objectList1.get("procedures");
+        Set<String> prods2 = objectList2.get("procedures");
+        StructureDiff prodDiff = compareStructure(conn1, conn2, prods1, prods2, StructureDiff.structureType.PROCEDURE);
+        prodDiff.setType(StructureDiff.structureType.PROCEDURE);
 
-        }catch (SQLException e){
-            Error("数据库查询错误:"+e.getMessage());
+
+        //获取并比较存储过程
+
+
+        List<StructureDiff> structureDiffList = new ArrayList<>();
+        structureDiffList.add(tableDiff);
+        structureDiffList.add(funcDiff);
+        structureDiffList.add(viewDiff);
+        structureDiffList.add(prodDiff);
+
+        return structureDiffList;
+    }
+
+    private StructureDiff compareStructure(Connection conn1, Connection conn2,
+                                           Set<String> tables1, Set<String> tables2,
+                                           StructureDiff.structureType type) throws SQLException {
+
+        StructureDiff structureDiff = new StructureDiff();
+        if(Objects.isNull(tables1)|| tables1.isEmpty()){
+            return structureDiff;
         }
 
-        // 3.获取两个库的对象的差异
+        Set<String> common = new HashSet<>(tables1);
+        common.retainAll(tables2);
+        Set<String> in1 = new HashSet<>(tables1);
+        in1.removeAll(common);
+        Set<String> in2 = new HashSet<>(tables2);
+        in2.removeAll(common);
 
-        // 4.根据（3）中对象的差异类型生成sql语句
+        //如果结构不同，直接增加差异条数，如果结构相同，进一步比较表数据
+        for(String str: common){
+            String showCreateSql = String.format("SHOW CREATE %s %s",type.toString(),str);
 
-        // 5.对生成语句的检查，排除语句顺序对影响的误判，以及空语句的排查。
-        return "PASS";
+
+
+            try (Statement statement1 = conn1.createStatement();
+                 Statement statement2 = conn2.createStatement();
+                 ResultSet rs1 = statement1.executeQuery(showCreateSql);
+                 ResultSet rs2 = statement2.executeQuery(showCreateSql)) {
+
+                String createStmt1 = "", createStmt2 = "";
+                if(type == StructureDiff.structureType.TABLE|| type == StructureDiff.structureType.VIEW){
+                    // create table语句在第二位
+                    if (rs1.next()) createStmt1 = rs1.getString(2);
+                    if (rs2.next()) createStmt2 = rs2.getString(2);
+                }
+                else{
+                    if (rs1.next()) createStmt1 = rs1.getString(3);
+                    if (rs2.next()) createStmt2 = rs2.getString(3);
+                }
+
+                if (!Objects.equals(createStmt1, createStmt2)) {
+                    // 结构不同，详细比较,这里用的是com.github.difflib
+                    structureDiff.add();
+
+                    List<String> sqlDef1 = DDLConverter.getDef(createStmt1.replaceAll("`",""));
+                    List<String> sqlDef2 = DDLConverter.getDef(createStmt2.replaceAll("`",""));
+                    Patch<String> patch =  DiffUtils.diff(sqlDef1,sqlDef2);
+                    List<String> unifiedDiff = UnifiedDiffUtils.generateUnifiedDiff("original","revised",sqlDef1,patch,0);
+
+
+                    // 如果是数据库
+                    //List<String> repair = new ArrayList<>();
+                    String repair = "";
+
+                    if(type == StructureDiff.structureType.TABLE){
+                        repair = DDLConverter.getRepairSql(patch);
+                    }
+                    structureDiff.addRepairSql(repair);
+
+                    //DDLConverter.DiffResult diffResult = DDLConverter.compare(sqlDef1,sqlDef2);
+                    System.out.println(unifiedDiff);
+
+                    //如果两个表的建表语句顺序相同，这里处理会比较简单
+
+
+
+
+
+                } else if(type == StructureDiff.structureType.TABLE ||type == StructureDiff.structureType.VIEW){
+                    String sql = Verify(conn1,conn2,str,str);
+                    if(!sql.equals("PASS")){
+                        structureDiff.add();
+                        structureDiff.addRepairSql(sql);
+                    }
+                }
+            }
+        }
+
+        for(String str: in1){
+            String showCreateSql = String.format("SHOW CREATE %s %s",type.toString(),str);
+            try (Statement statement1 = conn1.createStatement();
+                 ResultSet rs1 = statement1.executeQuery(showCreateSql);
+                 ) {
+
+                String createStmt = "";
+                if(type == StructureDiff.structureType.TABLE|| type == StructureDiff.structureType.VIEW){
+                    // create table语句在第二位
+                    if (rs1.next()) createStmt = rs1.getString(2);
+                }
+                else{
+                    if (rs1.next()) createStmt = rs1.getString(3);
+                }
+                structureDiff.addRepairSql(createStmt);
+            }
+        }
+
+        //drop语句
+        for(String str: in2){
+            String DropSql = String.format("DROP %s %s",type.toString(),str);
+            structureDiff.addRepairSql(DropSql);
+        }
+
+
+        structureDiff.setDiffCount(structureDiff.getDiffCount()+in1.size()+in2.size());
+
+        return structureDiff;
+    }
+
+    //测试函数，没有实际用途
+    Map<String,Set<String>> getObjects(Connection conn1, String dbName1) throws SQLException {
+
+        Map<String,Set<String>> map = new HashMap<>();
+        map.put("TABLE",new HashSet<>(Collections.singleton("CREATE TABLE `user` (\n" +
+                "  `id` bigint NOT NULL AUTO_INCREMENT,\n" +
+                "  `name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,\n" +
+                "  `phone` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,\n" +
+                "  `age` int DEFAULT NULL,\n" +
+                "  `role` bigint DEFAULT NULL,\n" +
+                "  PRIMARY KEY (`id`) USING BTREE,\n" +
+                "  KEY `user_role` (`role`),\n" +
+                "  CONSTRAINT `user_role` FOREIGN KEY (`role`) REFERENCES `role` (`id`) ON DELETE CASCADE\n" +
+                ") ENGINE=InnoDB AUTO_INCREMENT=9 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC")));
+
+        return null;
+    }
+    Map<String,Set<String>> getObjectList(Connection conn1, String dbName1) throws SQLException {
+
+        Map<String, Set<String>> objects = new HashMap<>();
+
+        DatabaseMetaData metaData = conn1.getMetaData();
+
+        // 获取表
+        ResultSet tables = metaData.getTables(dbName1, null, null, new String[]{"TABLE"});
+        Set<String> tableList = new HashSet<>();
+        while (tables.next()) {
+            tableList.add(tables.getString("TABLE_NAME"));
+        }
+        objects.put("tables", tableList);
+        tables.close();
+
+        // 获取视图
+        ResultSet views = metaData.getTables(dbName1, null, null, new String[]{"VIEW"});
+        Set<String> viewList = new HashSet<>();
+        while (views.next()) {
+            viewList.add(views.getString("TABLE_NAME"));
+        }
+        objects.put("views", viewList);
+        views.close();
+
+
+//        // 获取存储过程
+//        ResultSet procedures = metaData.getProcedures(dbName1, null, null);
+//        Set<String> procedureList = new HashSet<>();
+//        while (procedures.next()) {
+//            procedureList.add(procedures.getString("PROCEDURE_NAME"));
+//        }
+//        objects.put("procedures", procedureList);
+//        procedures.close();
+
+        // 获取函数
+        ResultSet functions = metaData.getFunctions(dbName1, null, null);
+        Set<String> functionList = new HashSet<>();
+        while (functions.next()) {
+            functionList.add(functions.getString("FUNCTION_NAME"));
+        }
+        objects.put("functions", functionList);
+        functions.close();
+
+//        //获取触发器
+//        Set<String> triggerList = new HashSet<>();
+//        String sql = "SELECT trigger_name FROM information_schema.triggers WHERE trigger_schema = ?";
+//        try (PreparedStatement stmt = conn1.prepareStatement(sql)) {
+//            stmt.setString(1, null);
+//            try (ResultSet rs = stmt.executeQuery()) {
+//                while (rs.next()) {
+//                    triggerList.add(rs.getString("trigger_name"));
+//                }
+//            }
+//        }
+
+        return objects;
     }
 
     /**
