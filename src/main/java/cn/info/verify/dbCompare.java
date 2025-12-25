@@ -110,14 +110,167 @@ public class dbCompare {
                 if(objType.equals("table")){
                     // 这里应该是由两个返回值的，但是貌似第二个返回值一直为空，且后续没有使用
                     errors = checkDataConsistency(db1Conn, db2Conn, qObj1, qObj2, reporter, options);
+                    if(!errors.isEmpty()){
+                        errorList.addAll(errors);
+                    }
+                }
+                else  reporter.reportState("-");
+                // selectedCode部分的逻辑
+                if ((int) options.get("verbosity") > 0) {
+                    if (!quiet) {
+                        System.out.println();
+                    }
+                    try {
+                        String createObj1 = dbCompareUtils.getCreateObject(db1Conn, qObj1, options, objType);
+                        String createObj2 = dbCompareUtils.getCreateObject(db2Conn, qObj2, options, objType);
+
+                        if ((int) options.get("verbosity") > 0 && !quiet) {
+                            System.out.println("# Object 1 definition:");
+                            System.out.println(createObj1);
+                            System.out.println("# Object 2 definition:");
+                            System.out.println(createObj2);
+                        }
+                    } catch (SQLException e) {
+                        System.err.println("Error getting object definition: " + e.getMessage());
+                    }
+                }
+
+                if (debugMsgs != null && !debugMsgs.isEmpty() && (int) options.get("verbosity") > 2) {
+                    reporter.reportErrors(debugMsgs);
+                }
+
+                if (!quiet) {
+                    reporter.reportErrors(errorList);
+                }
+                if (!errorList.isEmpty()) {
+                    success = false;
                 }
 
             }
-
+            return success;
         }
-
-        return success;
     }
+
+    /**
+     * 对比两个服务器上所有非系统数据库
+     *
+     * @param server1Val 服务器1连接信息
+     * @param server2Val 服务器2连接信息
+     * @param excludeList 要排除的数据库列表
+     * @param options 配置选项
+     * @return 对比结果 - true表示全部匹配，false表示有差异，null表示没有可比较的数据库
+     * @throws SQLException SQL执行异常
+     */
+    public boolean compareAllDatabases(String server1Val, String server2Val, List<String> excludeList, Map<String, Object> options) throws SQLException {
+        boolean success = true;
+        boolean quiet = (boolean) options.getOrDefault("quiet", false);
+
+        // 这里的server1Val只是装饰的，实际应该用的Connection
+
+        try(Connection conn1 = DriverManager.getConnection("jdbc:mysql://localhost:3306","root","infocore");
+            Connection conn2 = DriverManager.getConnection("jdbc:mysql://localhost:3307","root","infocore")) {
+
+            // 检查指定的服务器是否相同，这里简化处理
+            if(conn1.equals(conn2)) {
+                throw new SQLException(
+                        "Specified servers are the same (server1=localhost:3306 and " +
+                                "server2=localhost:3307). Cannot compare all databases on the same server."
+                );
+            }
+
+            // 获取除了排除的所有数据库
+            StringBuilder conditions = new StringBuilder();
+            if (excludeList != null && !excludeList.isEmpty()) {
+                // 添加WHERE条件排除指定数据库
+                String operator = (boolean) options.getOrDefault("use_regexp", false) ? "REGEXP" : "LIKE";
+                List<String> excludeConditions = new ArrayList<>();
+                for (String db : excludeList) {
+                    excludeConditions.add(String.format("SCHEMA_NAME NOT %s '%s'", operator, db));
+                }
+                conditions.append("AND ").append(String.join(" AND ", excludeConditions));
+            }
+
+            // 构建查询语句
+            String getDbsQuery = """
+                SELECT SCHEMA_NAME
+                FROM INFORMATION_SCHEMA.SCHEMATA
+                WHERE SCHEMA_NAME != 'INFORMATION_SCHEMA'
+                AND SCHEMA_NAME != 'PERFORMANCE_SCHEMA'
+                AND SCHEMA_NAME != 'mysql'
+                AND SCHEMA_NAME != 'sys'
+                %s
+            """.formatted(conditions.toString());
+
+            // 获取服务器1上的数据库
+            Set<String> server1Dbs = new HashSet<>();
+            try(PreparedStatement stmt1 = conn1.prepareStatement(getDbsQuery);
+                ResultSet rs1 = stmt1.executeQuery()) {
+                while(rs1.next()) {
+                    server1Dbs.add(rs1.getString(1));
+                }
+            }
+
+            // 获取服务器2上的数据库
+            Set<String> server2Dbs = new HashSet<>();
+            try(PreparedStatement stmt2 = conn2.prepareStatement(getDbsQuery);
+                ResultSet rs2 = stmt2.executeQuery()) {
+                while(rs2.next()) {
+                    server2Dbs.add(rs2.getString(1));
+                }
+            }
+
+            // 检查缺失的数据库
+            String direction = (String) options.getOrDefault("changes-for", "server1");
+            if ("server1".equals(direction)) {
+                Set<String> diffDbs = new HashSet<>(server1Dbs);
+                diffDbs.removeAll(server2Dbs);
+                for (String db : diffDbs) {
+                    String msg = String.format("The database %s on server1 does not exist on server2.", db);
+                    if (!quiet) {
+                        System.out.println("# " + msg);
+                    }
+                }
+            } else {
+                Set<String> diffDbs = new HashSet<>(server2Dbs);
+                diffDbs.removeAll(server1Dbs);
+                for (String db : diffDbs) {
+                    String msg = String.format("The database %s on server2 does not exist on server1.", db);
+                    if (!quiet) {
+                        System.out.println("# " + msg);
+                    }
+                }
+            }
+
+            Set<String> commonDbs = new HashSet<>(server1Dbs);
+            commonDbs.retainAll(server2Dbs);
+
+            if (!commonDbs.isEmpty()) {
+                if (!quiet) {
+                    System.out.println("# Comparing databases: " + String.join(", ", commonDbs));
+                }
+            } else {
+                success = false;
+            }
+
+            for (String db : commonDbs) {
+                try {
+                    boolean res = databaseCompare(server1Val, server2Val, db, db, options);
+                    if (!res) {
+                        success = false;
+                    }
+                    if (!quiet) {
+                        System.out.println("\n");
+                    }
+                } catch (SQLException e) {
+                    System.out.println("ERROR: " + e.getMessage() + "\n");
+                    success = false;
+                }
+            }
+
+            return success;
+        }
+    }
+
 
     private List<String> checkDataConsistency(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Reporter reporter, Map<String, Object> options) {
 
@@ -130,10 +283,41 @@ public class dbCompare {
             reporter.setReportState("-");
             try{
                 dbCompareUtils.DiffServer diffServer = dbCompareUtils.checkConsistency(db1Conn, db2Conn, obj1, obj2, options, reporter);
-            } catch (SQLException ignored) {
+                // if no differences, return
+                if ((diffServer == null) ||
+                        (!reverse && "server1".equals(direction) && diffServer.getFirst() == null) ||
+                        (!reverse && "server2".equals(direction) && diffServer.getSecond() == null)) {
+                    // 返回空的错误列表，表示没有差异
+                    return new ArrayList<>();
+                }
 
+                // 如果存在差异，根据方向构建差异列表
+                if (direction.equals("server1") || reverse) {
+                    if (diffServer.getFirst() != null) {
+                        errors.addAll(diffServer.getFirst());
+                    }
+                }
+
+                if (direction.equals("server2") || reverse) {
+                    if (diffServer.getSecond() != null) {
+                        errors.addAll(diffServer.getSecond());
+                    }
+                }
+            } catch (SQLException e) {
+                // 处理异常情况
+                if (e.getMessage().endsWith("not have an usable Index or primary key.")) {
+                    reporter.setReportState("SKIP");
+                    errors.add("# " + e.getMessage());
+                } else {
+                    reporter.setReportState("FAIL");
+                    errors.add(e.getMessage());
+                }
             }
+        } else {
+            reporter.setReportState("SKIP");
         }
+
+        return errors;
     }
 
     private List<String> checkRowCounts(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Reporter reporter, Map<String, Object> options) throws SQLException {
@@ -236,6 +420,8 @@ public class dbCompare {
             System.out.printf("%-"+ opeWidth + " %s", state);
         }
 
+        public void reportErrors(List<String> debugMsgs) {
+        }
     }
 
     private CheckResult checkObjects(Connection db1Conn, Connection db2Conn, String db1, String db2, Map<String,Object>options) throws SQLException {

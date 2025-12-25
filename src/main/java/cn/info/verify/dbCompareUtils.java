@@ -9,7 +9,6 @@ import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.ImmutableTriple;
 import org.springframework.stereotype.Component;
 
-import javax.sql.rowset.RowSetWarning;
 import java.sql.*;
 import java.util.*;
 
@@ -397,8 +396,6 @@ public class dbCompareUtils {
         // 这里是db.get_create_statement
         String showCreateSql = String.format("SHOW CREATE %s %s",objType,obj);
 
-
-
         try (Statement statement = dbConn.createStatement();
              ResultSet rs = statement.executeQuery(showCreateSql);) {
 
@@ -577,30 +574,50 @@ public class dbCompareUtils {
             // 这里是后续的整个_generate_data_diff_output
 
             if(direction.equals("server1") || reverse){
-                dataDiffs1 = generateDataDiffOutput(new ImmutableTriple<>(changedRows, extra1, extra2), obj1, obj2, useIndexes, options);
+                dataDiffs1 = generateDataDiffOutput(new ImmutableTriple<>(changedRows, extra1, extra2), db1Conn, db2Conn,obj1, obj2, useIndexes, options);
             }
 
             if(direction.equals("server2") || reverse){
-                dataDiffs2 = generateDataDiffOutput(new ImmutableTriple<>(changedRows, extra2, extra1), obj2, obj1, useIndexes, options);
+                dataDiffs2 = generateDataDiffOutput(new ImmutableTriple<>(changedRows, extra2, extra1), db2Conn, db1Conn, obj2, obj1, useIndexes, options);
             }
 
             // common是span的集合，span来自于pk_hash，即使span相同，pk_hash很可能是不同的，pk_hash的变动会影响行数据的hash，反之则不一定
             // mysql先是判断了行数据的hash，在判断pk_hash具体是多了，不变还是少了，如果要准确找出所有更改行，这是必须的
 
 
-
-            // changedRows.size内部代码 对应_get_change_rows_span 方法
-
-
+        }
+        if (binlogServer1) {
+            db1Conn.commit();
+            db1Conn.setAutoCommit(true);
+        }
+        if (binlogServer2) {
+            db2Conn.commit();
+            db1Conn.setAutoCommit(true);
         }
 
+        if (reporter != null) {
+            if (!dataDiffs1.isEmpty() || !dataDiffs2.isEmpty()) {
+                reporter.reportState("FAIL");
+            } else {
+                reporter.reportState("pass");
+            }
+        }
 
-        return null;
+        DiffServer diffServer = new DiffServer();
+        if (direction.equals("server1") || reverse) {
+            diffServer.setFirst(dataDiffs1.isEmpty() ? null : dataDiffs1);
+        }
+        if (direction.equals("server2") || reverse) {
+            diffServer.setSecond(dataDiffs2.isEmpty() ? null : dataDiffs2);
+        }
 
-
+        return diffServer;
     }
 
-    private static List<String> generateDataDiffOutput(ImmutableTriple<Set<String>, Set<String>, Set<String>> immutableTriple, String obj1, String obj2, List<String> useIndexes, Map<String, Object> options) {
+    private static List<String> generateDataDiffOutput(
+            ImmutableTriple<Set<String>, Set<String>, Set<String>> immutableTriple,
+            Connection dbConn1, Connection dbConn2,
+            String obj1, String obj2, List<String> useIndexes, Map<String, Object> options) throws SQLException {
 
         String difftype = (String) options.getOrDefault("difftype", "unified");
         String fmt = (String) options.getOrDefault("format", "grid");
@@ -616,22 +633,22 @@ public class dbCompareUtils {
 
             dataDiffs.add("# Data differences found among rows:");
 
-            ImmutablePair<ImmutablePair<List<String>,List<String>>,ImmutablePair<List<String>,List<String>>>
-                    tblRow = getChangedRowsSpan(obj1, obj2, changedRows, useIndexes);
+            ImmutablePair<ImmutablePair<List<Map<String, Object>>, List<Map<String, Object>>>, ImmutablePair<List<Map<String, Object>>, List<Map<String, Object>>>>
+                    tblRow = getChangedRowsSpan(dbConn1, obj1, dbConn2, obj2, changedRows, useIndexes);
 
-            ImmutablePair<List<String>,List<String>> tbl1Rows = tblRow.getLeft();
-            ImmutablePair<List<String>,List<String>> tbl2Rows = tblRow.getRight();
+            ImmutablePair<List<Map<String, Object>>, List<Map<String, Object>>> tbl1Rows = tblRow.getLeft();
+            ImmutablePair<List<Map<String, Object>>, List<Map<String, Object>>> tbl2Rows = tblRow.getRight();
 
 
         }
 
         if(extra1.size() > 0){
-            List<Map<String, Object>> resultList = getRowSpan(obj1,extra1,db1Conn);
+            List<Map<String, Object>> resultList = getRowSpan(obj1,extra1,dbConn1);
             extraIn1.addAll(resultList);
         }
 
         if(extra2.size() > 0){
-            List<Map<String, Object>> resultList = getRowSpan(obj2,extra2,db2Conn);
+            List<Map<String, Object>> resultList = getRowSpan(obj2,extra2,dbConn2);
             extraIn2.addAll(resultList);
         }
 
@@ -647,10 +664,17 @@ public class dbCompareUtils {
         return dataDiffs;
     }
 
-    private static ImmutablePair<ImmutablePair<List<String>, List<String>>, ImmutablePair<List<String>, List<String>>> getChangedRowsSpan(String obj1, String obj2, Set<String> changedRows, List<String> useIndexes) {
+    private static ImmutablePair<ImmutablePair<List<Map<String, Object>>, List<Map<String, Object>>>, ImmutablePair<List<Map<String, Object>>, List<Map<String, Object>>>> getChangedRowsSpan(
+            Connection db1Conn, String obj1, Connection db2Conn, String obj2, Set<String> changedRows, List<String> useIndexes) throws SQLException {
 
+        List<SpanData> fullSpanData1 = new ArrayList<>();
+        List<SpanData> fullSpanData2 = new ArrayList<>();
+
+        String qTblName1 = "compare_" + obj1;
+        String qTblName2 = "compare_" + obj2;
         for(String str: changedRows){
-            try(PreparedStatement statement = db1Conn.prepareStatement(String.format(DIFF_COMPARE,db1Conn.getCatalog(),compareTblName,str));){
+            try(PreparedStatement statement = db1Conn.prepareStatement(
+                    String.format(DIFF_COMPARE,db1Conn.getCatalog(),qTblName1,str));){
                 statement.setFetchSize(100);
                 statement.setFetchDirection(ResultSet.FETCH_FORWARD);
                 try(ResultSet resultSet = statement.executeQuery();){
@@ -673,8 +697,9 @@ public class dbCompareUtils {
             }
         }
 
+
         for(String str: changedRows){
-            try(PreparedStatement statement = db2Conn.prepareStatement(String.format(DIFF_COMPARE,db2Conn.getCatalog(),compareTblName,str));){
+            try(PreparedStatement statement = db2Conn.prepareStatement(String.format(DIFF_COMPARE,db2Conn.getCatalog(),qTblName2,str));){
                 statement.setFetchSize(100);
                 statement.setFetchDirection(ResultSet.FETCH_FORWARD);
                 try(ResultSet resultSet = statement.executeQuery();){
@@ -699,6 +724,10 @@ public class dbCompareUtils {
         }
 
 
+        List<Map<String,Object>> changedIn1 = new ArrayList<>();
+        List<Map<String,Object>> changedIn2 = new ArrayList<>();
+        List<Map<String,Object>> extraIn1 = new ArrayList<>();
+        List<Map<String,Object>> extraIn2 = new ArrayList<>();
 
         for (int pos = 0; pos < fullSpanData1.size(); pos++) {
             SpanData spanData1 = fullSpanData1.get(pos);
@@ -779,7 +808,10 @@ public class dbCompareUtils {
                         if (needChangeRes.next()) {
                             Map<String, Object> rowData = convertResultSetToMap(needChangeRes);
 
-                            if (!diffPkHash1.contains(res[1])) {
+                            if (diffPkHash1.contains(res[1])) {
+                                // 存储原始行（需要DELETE）
+                                changedIn2.add(rowData);
+                            } else {
                                 // 存储原始行（需要DELETE）
                                 extraIn2.add(rowData);
                             }
@@ -790,7 +822,7 @@ public class dbCompareUtils {
 
         }
 
-        return null;
+        return new ImmutablePair<>(new ImmutablePair<>(changedIn1,extraIn1),new ImmutablePair<>(changedIn2,extraIn2));
     }
 
     /**
