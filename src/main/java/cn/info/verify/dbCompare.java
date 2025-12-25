@@ -1,11 +1,12 @@
 package cn.info.verify;
 
 import cn.info.verify.compare.CheckResult;
+import lombok.Getter;
+import lombok.Setter;
+import org.springframework.http.server.PathContainer;
 import org.springframework.stereotype.Component;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
+import java.sql.*;
 import java.util.*;
 
 /**
@@ -18,6 +19,7 @@ public class dbCompare {
 
     private final static String ERROR_DB_MISSING = "The database %s does not exist.";
     private final static String ERROR_OBJECT_LIST = "The list of objects differs among database %s and %s.";
+    private final static String ERROR_ORW_COUNT = "Row counts are not the same among %s and %s.\n#";
     private final static Map<String, Object> DEFAULT_OPTIONS = new HashMap<>() {{
         put("quiet", false);
         put("verbosity", 0);
@@ -39,6 +41,9 @@ public class dbCompare {
 
         checkOptionDefault(options);
         boolean quiet = (boolean) options.getOrDefault("quiet","False");
+
+        // 提前声明函数结果success
+        boolean success = false;
 
         // 得到两个数据库
         dbCompareUtils.serverConnect(server1Val,server2Val,db1,db2,options);
@@ -68,10 +73,15 @@ public class dbCompare {
             //_check_objects
             CheckResult checkResult = checkObjects(db1Conn, db2Conn, db1, db2, options);
 
-            boolean success = !checkResult.isDiffers();
+            // 这里是python中第一次出现success
+            success = !checkResult.isDiffers();
 
-            //reporter 貌似没必要, 也忽略sqlMode
-            //这里的inBoth格式：   table_type:table_name
+            // reporter 用于打印输出，暂时忽略sqlMode
+
+            Reporter reporter = new Reporter(options);
+
+
+            // 这里的inBoth格式：   table_type:table_name
             List<String> inBoth = checkResult.getInBoth();
 
             for(String item : inBoth){
@@ -80,11 +90,152 @@ public class dbCompare {
 
                 String objType = item.split(":")[0];
 
+                String qObj1 = String.format("%s.%s",db1,item.split(":")[1]);
+                String qObj2 = String.format("%s.%s",db2,item.split(":")[1]);
+
+                List<String> errors = compareObject(db1Conn, db2Conn, qObj1, qObj2, reporter ,options, objType);
+
+                errorList.addAll(errors);
+
+                if(objType.equals("table")){
+                    errors = checkRowCounts(db1Conn, db2Conn, qObj1, qObj2, reporter, options);
+                    if(!errors.isEmpty()){
+                        errorList.addAll(errors);
+                    }
+                }
+                else{
+                    reporter.setReportState("-");
+                }
+
+                if(objType.equals("table")){
+                    // 这里应该是由两个返回值的，但是貌似第二个返回值一直为空，且后续没有使用
+                    errors = checkDataConsistency(db1Conn, db2Conn, qObj1, qObj2, reporter, options);
+                }
+
             }
 
         }
 
-        return true;
+        return success;
+    }
+
+    private List<String> checkDataConsistency(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Reporter reporter, Map<String, Object> options) {
+
+        String direction = (String) options.getOrDefault("changes-for", "server1");
+        boolean reverse = (boolean) options.getOrDefault("reverse", false);
+        boolean quiet = (boolean) options.getOrDefault("quiet", false);
+
+        List<String> errors = new ArrayList<>();
+        if(!(boolean) options.get("no_data")) {
+            reporter.setReportState("-");
+            try{
+                dbCompareUtils.DiffServer diffServer = dbCompareUtils.checkConsistency(db1Conn, db2Conn, obj1, obj2, options, reporter);
+            } catch (SQLException ignored) {
+
+            }
+        }
+    }
+
+    private List<String> checkRowCounts(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Reporter reporter, Map<String, Object> options) throws SQLException {
+
+        List<String> errors = new ArrayList<>();
+        if(!(boolean)options.get("no_row_count")) {
+            try(PreparedStatement statement1 = db1Conn.prepareStatement("SELECT COUNT(*) FROM " + obj1);
+                PreparedStatement statement2 = db2Conn.prepareStatement("SELECT COUNT(*) FROM " + obj2);
+                ResultSet resultSet1 = statement1.executeQuery();
+                ResultSet resultSet2 = statement2.executeQuery();
+            ) {
+                String rs1 = null,rs2 = null;
+                // count结果应该在第二列
+                if(resultSet1.next()) rs1 = resultSet1.getString(2);
+                if(resultSet2.next()) rs2 = resultSet2.getString(2);
+                if(rs1!=null && rs2!= null && !rs1.equals(rs2)){
+                    reporter.setReportState("FAIL");
+                    String msg = String.format(ERROR_ORW_COUNT, obj1, obj2);
+                    if(!(boolean) options.get("run_all_tests") && !(boolean) options.getOrDefault("quiet",false)){
+                        throw new Error(msg);
+                    }
+                    else{
+                        errors.add(String.format("# %s",msg));
+                    }
+                }
+
+                else {
+                    reporter.setReportState("PASS");
+                }
+            }
+        }
+
+        else{
+            reporter.setReportState("SKIP");
+        }
+        return errors;
+    }
+
+    private List<String> compareObject(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Reporter reporter, Map<String, Object> options, String objType) throws SQLException {
+
+        List<String> errors = new ArrayList<>();
+        if(!(boolean)options.get("no_diff")){
+            Map<String, Object> newOpt = new HashMap<>(options);
+            newOpt.replace("quiet",true);
+            newOpt.replace("suppress_sql",true);
+
+            List<String> res = dbCompareUtils.diffObjects(db1Conn, db2Conn, obj1, obj2, newOpt, objType);
+
+            if(!Objects.isNull(res)){
+                reporter.setReportState("FAIL");
+                errors.addAll(res);
+                if(!(boolean)options.get("run_all_tests") && !(boolean)options.getOrDefault("quiet",false)){
+                    throw new Error("The object definitions do not match.");
+                }
+            }
+            else{
+                reporter.setReportState("PASS");
+            }
+        }
+        else{
+            reporter.setReportState("SKIP");
+        }
+
+        return errors;
+    }
+
+
+    @Getter
+    @Setter
+    public class Reporter{
+
+        String reportState;
+        String reportObject;
+        boolean quiet;
+        int opeWidth = 10;
+        int typeWidth = 15;  // 对象类型列宽度
+        int descWidth = 50;  // 描述列宽度
+
+        Reporter(){
+
+        }
+        Reporter(Map<String,Object> Options){
+
+        }
+
+        void reportObject(String objType, String description){
+            if(quiet){
+                return;
+            }
+            System.out.printf("\n# %-" + typeWidth + "s %-" + descWidth + "s", objType, description);
+        }
+
+        /**
+         * 左对齐打印输出
+         */
+        void reportState(String state){
+            if(quiet){
+                return;
+            }
+            System.out.printf("%-"+ opeWidth + " %s", state);
+        }
+
     }
 
     private CheckResult checkObjects(Connection db1Conn, Connection db2Conn, String db1, String db2, Map<String,Object>options) throws SQLException {

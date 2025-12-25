@@ -1,16 +1,75 @@
 package cn.info.verify;
 
+import com.github.difflib.DiffUtils;
+import com.github.difflib.UnifiedDiffUtils;
+import com.github.difflib.patch.Patch;
+import lombok.Getter;
+import lombok.Setter;
+import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.apache.commons.lang3.tuple.ImmutableTriple;
 import org.springframework.stereotype.Component;
 
-import java.sql.Connection;
-import java.sql.DatabaseMetaData;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import javax.sql.rowset.RowSetWarning;
+import java.sql.*;
 import java.util.*;
 
 @Component
 public class dbCompareUtils {
 
+    private final static int DEFAULT_SPAN_KEY_SIZE = 8;
+    private static final List<String> PRIMARY_KEYS = new ArrayList<>();
+    private static final List<String> COMPARE_COLUMNS = new ArrayList<>();
+
+    private static final String COMPARE_TABLE = """
+        CREATE TEMPORARY TABLE %s.%s (
+            compare_sign binary(16) NOT NULL,
+            pk_hash binary(16) NOT NULL,
+            span binary(%d) NOT NULL,
+            %s,
+            INDEX span_key (span, pk_hash));
+    """;
+
+    private static final String INSERT_TABLE = """
+        INSERT INTO %s.%s
+           (compare_sign, pk_hash, span, %s)
+           SELECT
+           UNHEX(MD5(CONCAT_WS('/', %s))),
+           UNHEX(MD5(CONCAT_WS('/', %s))),
+           UNHEX(LEFT(MD5(CONCAT_WS('/', %s)), %d)),
+           %s
+           FROM %s.%s;
+    """;
+
+    private static final String SUM_TABLE = """
+        SELECT HEX(span) as span, COUNT(*) as cnt,
+            CONCAT(SUM(CONV(SUBSTRING(HEX(compare_sign),1,8),16,10)),
+            SUM(CONV(SUBSTRING(HEX(compare_sign),9,8),16,10)),
+            SUM(CONV(SUBSTRING(HEX(compare_sign),17,8),16,10)),
+            SUM(CONV(SUBSTRING(HEX(compare_sign),25,8),16,10))) as sig
+        FROM %s.%s
+        GROUP BY span
+    """;
+
+    private static final String DIFF_COMPARE = """
+        SELECT * FROM %s.%s
+            WHERE span = UNHEX('%s') ORDER BY pk_hash
+    """;
+
+    private static final String DIFF_COMPARE_BATCH = """
+        SELECT * FROM %s.%s
+            WHERE span IN (%s) ORDER BY span, pk_hash
+    """;
+
+
+    private static final String QUERY_COMPARE_SPAN = """
+        SELECT * FROM %s.%s WHERE %s
+    """;
+
+    private static final String COMPARE_TABLE_DROP = """
+        DROP TABLE %s.%s;
+    """;
+
+    private static final String COMPARE_TABLE_NAME = "compare_%s";
 
     public static void serverConnect(String server1Val, String server2Val, String db1, String db2, Map<String, Object> options) {
     }
@@ -75,6 +134,297 @@ public class dbCompareUtils {
         return true;
     }
 
+
+    public static List<String> diffObjects(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Map<String, Object> options, String objType) throws SQLException {
+
+        // options可以设置成一个具体的类，因为可设置的总数是固定的
+        boolean quiet = (boolean) options.getOrDefault("quiet",false);
+        String diffType = (String) options.getOrDefault("diffType","unified");
+        int width = (int) options.getOrDefault("width", 75);
+        String direction = (String) options.getOrDefault("changes-for", "");
+        boolean reverse = (boolean) options.getOrDefault("reverse", false);
+        boolean skipTableOpts = (boolean) options.getOrDefault("skip_table_opts", false);
+        boolean compactDiff = (boolean) options.getOrDefault("compact", false);
+
+        String object1Create = getCreateObject(db1Conn, obj1, options, objType);
+        String object2Create = getCreateObject(db1Conn, obj1, options, objType);
+
+        if(objType.equals("database") && obj1.equals(obj2)){
+            String[] quotes = {"'", "\"", "`"};
+
+            // 从数据库名中移除引号字符
+            String db1 = removeQuotes(obj1, quotes);
+            String db2 = removeQuotes(obj2, quotes);
+
+            // 从创建语句中移除数据库名，并跳过第一个字符
+            String first = removeDbNameAndSkipFirstChar(object1Create, db1);
+            String second = removeDbNameAndSkipFirstChar(object2Create, db2);
+
+            // 如果去除数据库名后的内容相同，则将两个创建语句置为空
+            if (first.equals(second)) {
+                object1Create = "";
+                object2Create = "";
+            }
+        }
+
+        if(!quiet) {
+            System.out.printf("# Comparing %s to %s%n",obj1, obj2);
+            //后面有输出空格，这里忽略了
+        }
+
+        List<String> object1CreateList = Arrays.stream(object1Create.split("\n")).toList();
+        List<String> object2CreateList = Arrays.stream(object2Create.split("\n")).toList();
+
+
+        List<String> diffServer1 = new ArrayList<>();
+        List<String> diffServer2= new ArrayList<>();
+        List<String> transformServer1 = new ArrayList<>();
+        List<String> transformServer2= new ArrayList<>();
+
+
+        // 支持选择方向或反转当前方向,这里的server1代表以server2为生产库，server1是容灾库
+        if(direction.equals("server1") || direction.isEmpty() || reverse){
+            diffServer1 = getDiff(object1CreateList,object2CreateList,obj1,obj2,diffType,compactDiff);
+
+            if (diffType.equals("sql") && diffServer1 != null) {
+                transformServer1 = getTransform(db1Conn, db2Conn,
+                        obj1, obj2, options,
+                        objType);
+            }
+        }
+
+        if(direction.equals("server2") || reverse){
+            diffServer2 = getDiff(object2CreateList,object1CreateList,obj2,obj1,diffType,compactDiff);
+
+            if (diffType.equals("sql") && diffServer2 != null) {
+                transformServer2 = getTransform(db2Conn, db1Conn,
+                        obj2, obj1, options,
+                        objType);
+            }
+        }
+        // 用于提示用户的差异语句
+        List<String> diffList = new ArrayList<>();
+
+        if(direction.equals("server1") || direction.isEmpty()) {
+            diffList = buildDiffList(db1Conn, db2Conn, transformServer1, transformServer2,
+                    "server1", "server2" ,options);
+        }
+        else {
+            diffList = buildDiffList(db2Conn, db1Conn, transformServer2, transformServer1,
+                    "server2", "server1" ,options);
+        }
+
+        // 三个变量分别对应sameTableDef， tblOptsDiff， samePartDef
+        Definition diffDefinition = new Definition();
+
+        if (objType.equals("table")){
+            diffDefinition = checkTablesStructure(db1Conn,db2Conn, obj1, obj2, options, diffType);
+        }
+
+        // todo ansi_quotes的实现
+        if(!diffList.isEmpty() && diffDefinition.getBasicDef().length > 0 && !diffDefinition.getPartDef().isEmpty()){
+            System.out.println("[PASS]");
+            return null;
+        }
+
+        if(!diffList.isEmpty() && direction.isEmpty() && diffDefinition.getBasicDef().length > 0
+                && diffDefinition.getColDef().isEmpty()) {
+            if(quiet) {
+                System.out.println("[PASS]");
+                System.out.println("# WARNING: The tables structure is the same, but the " +
+                        "columns order is different. Use --change-for to take the " +
+                        "order into account.");
+            }
+            return null;
+        }
+
+        if (diffType.equals("sql") &&
+                ( (direction.equals("server1") && transformServer1.isEmpty() && !diffServer1.isEmpty() )
+                        || (direction.equals("server2") && transformServer2.isEmpty() && !diffServer2.isEmpty() ))){
+
+            if(!quiet) System.out.println("[FAIL]");
+            for(String line : diffList){
+                System.out.println(line);
+            }
+            System.out.printf("# WARNING: Could not generate SQL statements for differences " +
+                    "between %s and %s. No changes required or not supported " +
+                    "difference.%n",obj1,obj2);
+            return diffList;
+        }
+
+        if(!diffList.isEmpty()){
+            if(!quiet){
+                System.out.println("[FAIL]");
+            }
+
+            if(!quiet || (!(boolean) options.getOrDefault("suppress_sql",false) && diffType.equals("sql"))){
+                for(String line : diffList){
+                    System.out.println(line);
+                }
+
+                if(diffDefinition.getPartDef().isEmpty()){
+                    System.out.println("# WARNING: Partition changes were not generated (not supported).");
+                }
+            }
+            return diffList;
+        }
+
+        if(!quiet){
+            System.out.println("[PASS]");
+            if(skipTableOpts && diffDefinition.getBasicDef().length>0){
+                System.out.println("# WARNING: Table options are ignored and differences were found:");
+
+                for(String diff : diffDefinition.getBasicDef()){
+                    System.out.printf("# %s",diff);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static Definition checkTablesStructure(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Map<String, Object> options, String diffType) {
+
+        return new Definition();
+    }
+
+    public  static List<String> buildDiffList(Connection db1Conn, Connection db2Conn, List<String> transformServer1, List<String> transformServer2, String server1, String server2, Map<String, Object> options) {
+
+        return new ArrayList<>();
+    }
+
+    private static List<String> getTransform(Connection db1Conn, Connection db2Conn, String name1, String name2, Map<String, Object> options, String objType) throws SQLException {
+
+        if(name1.isEmpty() || objType.equals("database")) {
+            name1 = db1Conn.getCatalog();
+            name1 = db2Conn.getCatalog();
+        }
+
+        Definition obj1 = getObjectDefinition(db1Conn.getCatalog(),name1,objType,1);
+        Definition obj2 = getObjectDefinition(db2Conn.getCatalog(),name2,objType,2);
+
+        List<String> transformStr = new ArrayList<>();
+
+        SQLTransformer xform = new SQLTransformer(db1Conn.getCatalog(), db2Conn.getCatalog(),
+                obj1, obj2, objType, (int)options.getOrDefault("verbosity",0) ,options);
+        transformStr = xform.transformDefinition();
+
+        return transformStr;
+    }
+
+    /**
+     * 获取对象定义(这个参数num没有意义，只是区分模拟的对象)
+     * @return String[] basicDef;
+     *     List<String[]> colDef;
+     *     List<String[]> partDef;
+     */
+    private static Definition getObjectDefinition(String catalog, String name1, String objType, int num) {
+
+        // 这里有一些通过INFORMATION_SCHEMA获取的数据以及数据处理工作，我直接模拟一个可能的结果
+
+        return new Definition(num);
+    }
+
+    /**
+     * 得到行差异
+     * @return List(String)
+     */
+    private static List<String> getDiff(List<String> object1CreateList, List<String> object2CreateList, String obj1, String obj2, String diffType, boolean compactDiff) {
+
+        List<String> diffStr = new ArrayList<>();
+        Patch<String> patch =  DiffUtils.diff(object1CreateList,object2CreateList);
+
+        if(Set.of("unified", "sql").contains(diffType)) {
+            List<String> unifiedDiff = UnifiedDiffUtils.generateUnifiedDiff(obj1,obj2, object1CreateList,patch,0);
+
+            for(String line : unifiedDiff) {
+                if(compactDiff){
+                    if(line.startsWith("@@ ")) {
+                        diffStr.add(line.strip());
+                    }
+                    else {
+                        diffStr.add(line.strip());
+                    }
+                }
+            }
+        }
+        // 这个工具貌似只支持unified，后面的先放一下
+        else if(diffType.equals("context")){
+            List<String> unifiedDiff = UnifiedDiffUtils.generateUnifiedDiff(obj1,obj2, object1CreateList,patch,0);
+        }
+
+
+        return diffStr;
+    }
+
+    /**
+     * 移除引号
+     */
+    private static String removeQuotes(String input, String[] quotes) {
+        String result = input;
+        for (String quote : quotes) {
+            result = result.replace(quote, "");
+        }
+        return result;
+    }
+
+    /**
+     * 从创建语句中移除数据库名并跳过第一个字符
+     */
+    private static String removeDbNameAndSkipFirstChar(String createStmt, String dbName) {
+        // 移除数据库名
+        String withoutDbName = createStmt.replace(dbName, "");
+        // 跳过第一个字符（[1::] 的效果）
+        if (withoutDbName.length() > 0) {
+            return withoutDbName.substring(1);
+        }
+        return withoutDbName;
+    }
+
+    /**
+     * get_create_object
+     */
+    public static String getCreateObject(Connection dbConn, String obj, Map<String, Object> options, String objType) throws SQLException {
+
+        int verbosity = (int) options.getOrDefault("verbosity", 0);
+        boolean quiet = (boolean) options.getOrDefault("quiet", false);
+
+        // 原代码是当type是database时， 将type和name都设置成database
+        if (obj.isEmpty() || objType.equals("DATABASE")){
+            obj = dbConn.getCatalog();
+        }
+
+        // 这里是db.get_create_statement
+        String showCreateSql = String.format("SHOW CREATE %s %s",objType,obj);
+
+
+
+        try (Statement statement = dbConn.createStatement();
+             ResultSet rs = statement.executeQuery(showCreateSql);) {
+
+            String createStmt = "";
+            if (objType.equals("table") || objType.equals("view")) {
+                // create table语句在第二位
+                if (rs.next()) createStmt = rs.getString(2);
+            } else {
+                if (rs.next()) createStmt = rs.getString(3);
+            }
+
+            if(verbosity > 0 && !quiet) {
+                if(!obj.isEmpty()) {
+                    System.out.printf("\n# Definition for object %s.%s:%n",dbConn.getCatalog(),obj);
+                }
+                else {
+                    System.out.printf("\n# Definition for object %s:%n",dbConn.getCatalog());
+                }
+
+                System.out.println(createStmt);
+            }
+            return createStmt;
+
+        }
+    }
+
     /**
      * 原方法返回的是三个列表，直接在主函数中处理
      */
@@ -82,11 +432,7 @@ public class dbCompareUtils {
 
     /**
      * 拼接table_name 和 table_type
-     * @param connection
-     * @param databaseName
-     * @param options
      * @return table_name:table_type
-     * @throws SQLException
      */
     public static List<String> getObjects(Connection connection, String databaseName, Map<String,Object> options) throws SQLException {
         List<String> objects = new ArrayList<>();
@@ -107,5 +453,766 @@ public class dbCompareUtils {
         Collections.sort(objects);
 
         return objects;
+    }
+
+    public static DiffServer checkConsistency(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Map<String, Object> options, dbCompare.Reporter reporter) throws SQLException {
+        if(options == null){
+            options = new HashMap<>();
+        }
+        int spanKeySize = (int) options.getOrDefault("span_key_size", DEFAULT_SPAN_KEY_SIZE);
+        List<String> useIndexes = (List<String>) options.getOrDefault("use_indexes",null);
+        String direction = (String) options.getOrDefault("changes-for", "server1");
+        boolean reverse = (boolean) options.getOrDefault("reverse", false);
+
+        if(reporter != null){
+            reporter.reportObject("","- Compare table checksum");
+            reporter.reportState("");
+            reporter.reportState("");
+        }
+        if(!(boolean) options.get("no_checksum_table")){
+            Long checksum1 = CheckSum(db1Conn, obj1);
+            Long checksum2 = CheckSum(db2Conn, obj2);
+
+            // 这里没有err，就用checksum1 == 0来判断了
+            if(checksum1 == 0 || checksum2 == 0){
+                throw new SQLException(String.format("Error executing CHECKSUM TABLE on %s:%s or %s:%s",
+                        db1Conn.getCatalog(), obj1, db2Conn.getCatalog(), obj2));
+            }
+
+            if(checksum1.equals(checksum2)){
+                if(reporter != null){
+                    reporter.reportState("pass");
+                }
+                return null;
+            }
+            else{
+                if(reporter != null){
+                    reporter.reportState("FAIL");
+                }
+            }
+        }
+        else if(reporter != null){
+            reporter.reportState("SKIP");
+        }
+
+        // todo 通过用户设置的index进行后续的数据一致性检验操作
+        //unq_use_indexes, table1_use_indexes, table2_use_indexes
+
+        //检查二进制日志状态
+        boolean binlogServer1 = false;
+        boolean binlogServer2 = false;
+        if ((boolean) options.getOrDefault("toggle_binlog",false)){
+            binlogServer1 = isBinlogEnabled(db1Conn);
+            binlogServer2 = isBinlogEnabled(db2Conn);
+            if(binlogServer1){
+                db1Conn.rollback();
+                disableBinlog(db1Conn);
+            }
+            if(binlogServer2){
+                db2Conn.commit();
+                disableBinlog(db2Conn);
+            }
+        }
+
+        List<String> dataDiffs1 = new ArrayList<>();
+        List<String> dataDiffs2 = new ArrayList<>();
+
+        if(reporter != null){
+            reporter.reportObject("","- Find row differences");
+            reporter.reportState("");
+            reporter.reportState("");
+        }
+
+        // 这里还应该有个使用 用户输入的index的操作
+        setupCompare(db1Conn, db2Conn, obj1, obj2, spanKeySize, useIndexes);
+
+        String compareTblName = "compare_"+obj1;
+
+        // 填充比较表，并从每个表中检索行
+        List<String[]> tbl1Hash = makeSumRows(db1Conn, db1Conn.getCatalog(), compareTblName, obj1);
+        List<String[]> tbl2Hash = makeSumRows(db2Conn, db2Conn.getCatalog(), compareTblName, obj2);
+
+        // 计算交集，类似getCommonList
+        Set<String[]> in1Not2 = new HashSet<>(tbl1Hash);
+        Set<String[]> in2Not1 = new HashSet<>(tbl2Hash);
+        Set<String[]> same = new HashSet<>(in1Not2);
+        same.retainAll(in2Not1);
+
+        // 计算仅在set1中的元素
+        in1Not2.removeAll(same);
+
+        // 计算仅在set2中的元素
+        in2Not1.removeAll(same);
+
+        if(!in1Not2.isEmpty() || !in2Not1.isEmpty() ){
+            List<String> tableDiffs1 = new ArrayList<>();
+            List<String> tableDiffs2 = new ArrayList<>();
+            for(String[] str : in1Not2){
+                tableDiffs1.add(str[0]);
+            }
+
+            for(String[] str : in2Not1){
+                tableDiffs2.add(str[0]);
+            }
+
+            Set<String> changedRows = new HashSet<>(tableDiffs1);
+            Set<String> extra2 = new HashSet<>(tableDiffs2);
+            Set<String> extra1 = new HashSet<>(tableDiffs1);
+
+            // common是原代码中的changed_rows
+            changedRows.retainAll(extra2);
+            extra1.removeAll(changedRows);
+            extra2.removeAll(changedRows);
+
+            List<SpanData> fullSpanData1 = new ArrayList<>();
+            List<SpanData> fullSpanData2 = new ArrayList<>();
+
+            List<Map<String,Object>> changedIn1 = new ArrayList<>();
+            List<Map<String,Object>> extraIn1 = new ArrayList<>();
+            List<Map<String,Object>> extraIn2 = new ArrayList<>();
+
+            db1Conn.setAutoCommit(false);
+            db2Conn.setAutoCommit(false);
+
+            // 这里是后续的整个_generate_data_diff_output
+
+            if(direction.equals("server1") || reverse){
+                dataDiffs1 = generateDataDiffOutput(new ImmutableTriple<>(changedRows, extra1, extra2), obj1, obj2, useIndexes, options);
+            }
+
+            if(direction.equals("server2") || reverse){
+                dataDiffs2 = generateDataDiffOutput(new ImmutableTriple<>(changedRows, extra2, extra1), obj2, obj1, useIndexes, options);
+            }
+
+            // common是span的集合，span来自于pk_hash，即使span相同，pk_hash很可能是不同的，pk_hash的变动会影响行数据的hash，反之则不一定
+            // mysql先是判断了行数据的hash，在判断pk_hash具体是多了，不变还是少了，如果要准确找出所有更改行，这是必须的
+
+
+
+            // changedRows.size内部代码 对应_get_change_rows_span 方法
+
+
+        }
+
+
+        return null;
+
+
+    }
+
+    private static List<String> generateDataDiffOutput(ImmutableTriple<Set<String>, Set<String>, Set<String>> immutableTriple, String obj1, String obj2, List<String> useIndexes, Map<String, Object> options) {
+
+        String difftype = (String) options.getOrDefault("difftype", "unified");
+        String fmt = (String) options.getOrDefault("format", "grid");
+        boolean compact_diff = (boolean) options.getOrDefault("compact", false);
+
+        Set<String> changedRows = immutableTriple.getLeft();
+        Set<String> extra1 = immutableTriple.getMiddle();
+        Set<String> extra2 = immutableTriple.getRight();
+
+        List<String> dataDiffs = new ArrayList<>();
+
+        if(changedRows.size() > 0){
+
+            dataDiffs.add("# Data differences found among rows:");
+
+            ImmutablePair<ImmutablePair<List<String>,List<String>>,ImmutablePair<List<String>,List<String>>>
+                    tblRow = getChangedRowsSpan(obj1, obj2, changedRows, useIndexes);
+
+            ImmutablePair<List<String>,List<String>> tbl1Rows = tblRow.getLeft();
+            ImmutablePair<List<String>,List<String>> tbl2Rows = tblRow.getRight();
+
+
+        }
+
+        if(extra1.size() > 0){
+            List<Map<String, Object>> resultList = getRowSpan(obj1,extra1,db1Conn);
+            extraIn1.addAll(resultList);
+        }
+
+        if(extra2.size() > 0){
+            List<Map<String, Object>> resultList = getRowSpan(obj2,extra2,db2Conn);
+            extraIn2.addAll(resultList);
+        }
+
+        // 如果changedIn1不为空 表示需要 update table2 ，extraIn1 需要table2 insert， extraIn2 需要table2 delete
+        if(!changedIn1.isEmpty() || !extraIn1.isEmpty() || !extraIn2.isEmpty()){
+            List<String> fixSqlStatements = generateFixSqlStatements(changedIn1, extraIn1, extraIn2, obj2);
+
+            for(String sql : fixSqlStatements) {
+                System.out.println(sql);
+            }
+        }
+
+        return dataDiffs;
+    }
+
+    private static ImmutablePair<ImmutablePair<List<String>, List<String>>, ImmutablePair<List<String>, List<String>>> getChangedRowsSpan(String obj1, String obj2, Set<String> changedRows, List<String> useIndexes) {
+
+        for(String str: changedRows){
+            try(PreparedStatement statement = db1Conn.prepareStatement(String.format(DIFF_COMPARE,db1Conn.getCatalog(),compareTblName,str));){
+                statement.setFetchSize(100);
+                statement.setFetchDirection(ResultSet.FETCH_FORWARD);
+                try(ResultSet resultSet = statement.executeQuery();){
+                    List<String[]> spanRowList = new ArrayList<>();
+                    Set<RowSignature> cmpSigns = new HashSet<>();
+                    while(resultSet.next()){
+                        String[] spanRow = new String[3+PRIMARY_KEYS.size()];
+                        for(int i =1; i<=3+PRIMARY_KEYS.size();i++){
+                            spanRow[i-1] = resultSet.getString(i);
+                        }
+                        spanRowList.add(spanRow);
+                        RowSignature signature = new RowSignature(
+                                resultSet.getString(1),  // compare_sign
+                                resultSet.getString(2)   // pk_hash
+                        );
+                        cmpSigns.add(signature);
+                    }
+                    fullSpanData1.add(new SpanData(spanRowList,cmpSigns));
+                }
+            }
+        }
+
+        for(String str: changedRows){
+            try(PreparedStatement statement = db2Conn.prepareStatement(String.format(DIFF_COMPARE,db2Conn.getCatalog(),compareTblName,str));){
+                statement.setFetchSize(100);
+                statement.setFetchDirection(ResultSet.FETCH_FORWARD);
+                try(ResultSet resultSet = statement.executeQuery();){
+                    List<String[]> spanRowList = new ArrayList<>();
+                    Set<RowSignature> cmpSigns = new HashSet<>();
+                    while(resultSet.next()){
+                        String[] spanRow = new String[3+PRIMARY_KEYS.size()];
+
+                        for(int i =1; i<=3+PRIMARY_KEYS.size();i++){
+                            spanRow[i-1] = resultSet.getString(i);
+                        }
+                        spanRowList.add(spanRow);
+                        RowSignature signature = new RowSignature(
+                                resultSet.getString(1),  // compare_sign
+                                resultSet.getString(2)   // pk_hash
+                        );
+                        cmpSigns.add(signature);
+                    }
+                    fullSpanData2.add(new SpanData(spanRowList,cmpSigns));
+                }
+            }
+        }
+
+
+
+        for (int pos = 0; pos < fullSpanData1.size(); pos++) {
+            SpanData spanData1 = fullSpanData1.get(pos);
+            SpanData spanData2 = fullSpanData2.get(pos);
+
+            // 确定表1和表2的不同行（排除未更改的行）
+            Set<RowSignature> diffRowsSign1 = calculateDifference(spanData1.getSignatures(), spanData2.getSignatures());
+            Set<RowSignature> diffRowsSign2 = calculateDifference(spanData2.getSignatures(), spanData1.getSignatures());
+
+            // 提取比较签名中的pk_hash
+            Set<String> diffPkHash1 = extractPkHashes(diffRowsSign1);
+            Set<String> diffPkHash2 = extractPkHashes(diffRowsSign2);
+
+
+            for(String[] res :spanData1.getRowData()){
+                if(diffRowsSign1.contains(new RowSignature(res[0],res[1]))){
+                    String[] pks = Arrays.copyOfRange(res, 3, res.length);
+
+                    StringBuilder whereClause = new StringBuilder();
+                    for (int i = 0; i < PRIMARY_KEYS.size(); i++) {
+                        if (i > 0) {
+                            whereClause.append(" AND ");
+                        }
+                        whereClause.append(PRIMARY_KEYS.get(i))
+                                .append(" = '")
+                                .append(pks[i])
+                                .append("'");
+                    }
+                    String whereClauseStr = whereClause.toString();
+
+                    String query = String.format(QUERY_COMPARE_SPAN,
+                            db1Conn.getCatalog(),
+                            obj1,
+                            whereClauseStr);
+
+                    try(PreparedStatement Statement = db1Conn.prepareStatement(query);
+                        ResultSet needChangeRes = Statement.executeQuery()){
+                        // 处理查询结果并分类
+                        if (needChangeRes.next()) {
+                            Map<String, Object> rowData = convertResultSetToMap(needChangeRes);
+
+                            if (diffPkHash2.contains(res[1])) {
+                                // 存储原始变更行（需要UPDATE）
+                                changedIn1.add(rowData);
+                            } else {
+                                // 存储原始额外行（需要insert）
+                                extraIn1.add(rowData);
+                            }
+                        }
+                    }
+                }
+            }
+
+            for(String[] res :spanData2.getRowData()){
+                if(diffRowsSign2.contains(new RowSignature(res[0],res[1]))){
+                    String[] pks = Arrays.copyOfRange(res, 3, res.length );
+
+                    StringBuilder whereClause = new StringBuilder();
+                    for (int i = 0; i < PRIMARY_KEYS.size(); i++) {
+                        if (i > 0) {
+                            whereClause.append(" AND ");
+                        }
+                        whereClause.append(PRIMARY_KEYS.get(i))
+                                .append(" = '")
+                                .append(pks[i])
+                                .append("'");
+                    }
+                    String whereClauseStr = whereClause.toString();
+
+                    String query = String.format(QUERY_COMPARE_SPAN,
+                            db2Conn.getCatalog(),
+                            obj2,
+                            whereClauseStr);
+
+                    try(PreparedStatement Statement = db1Conn.prepareStatement(query);
+                        ResultSet needChangeRes = Statement.executeQuery();){
+                        // 处理查询结果并分类
+                        if (needChangeRes.next()) {
+                            Map<String, Object> rowData = convertResultSetToMap(needChangeRes);
+
+                            if (!diffPkHash1.contains(res[1])) {
+                                // 存储原始行（需要DELETE）
+                                extraIn2.add(rowData);
+                            }
+                        }
+                    }
+                }
+            }
+
+        }
+
+        return null;
+    }
+
+    /**
+     * 根据变更数据生成SQL修复语句
+     * @param changedIn1 需要更新的变更行（表1到表2）
+     * @param extraIn1 需要删除的额外行（表1独有）
+     * @param extraIn2 需要插入的额外行（表2独有）
+     * @param table2 容灾表名
+     * @return SQL修复语句列表
+     */
+    private static List<String> generateFixSqlStatements(List<Map<String, Object>> changedIn1,
+                                                         List<Map<String, Object>> extraIn1,
+                                                         List<Map<String, Object>> extraIn2,
+                                                         String table2) {
+        List<String> fixSqlList = new ArrayList<>();
+
+        // 生成UPDATE语句（表1变更到表2）
+        for (Map<String, Object> rowData : changedIn1) {
+            String updateSql = generateUpdateSql(table2, rowData);
+            fixSqlList.add(updateSql);
+        }
+
+        // 生成DELETE语句（删除表2中多余的行）
+        for (Map<String, Object> rowData : extraIn1) {
+            String insertSql = generateInsertSql(table2, rowData);
+            fixSqlList.add(insertSql);
+        }
+
+        // 生成INSERT语句（向表2插入缺少的行）
+        for (Map<String, Object> rowData : extraIn2) {
+            String deleteSql = generateDeleteSql(table2, rowData);
+            fixSqlList.add(deleteSql);
+        }
+
+        return fixSqlList;
+    }
+
+    /**
+     * 生成UPDATE SQL语句
+     */
+    private static String generateUpdateSql(String tableName, Map<String, Object> rowData) {
+        StringBuilder sql = new StringBuilder("UPDATE ");
+        sql.append(tableName).append(" SET ");
+
+        boolean first = true;
+        StringBuilder setClause = new StringBuilder();
+        StringBuilder whereClause = new StringBuilder();
+
+        // 构建SET子句
+        for (Map.Entry<String, Object> entry : rowData.entrySet()) {
+            String columnName = entry.getKey();
+            Object value = entry.getValue();
+
+            // 跳过主键列，主键列用于WHERE条件
+            if (!PRIMARY_KEYS.contains(columnName)) {
+                if (!first) {
+                    setClause.append(", ");
+                }
+                setClause.append(columnName).append(" = ");
+                if (value == null) {
+                    setClause.append("NULL");
+                } else {
+                    setClause.append("'").append(value.toString()).append("'");
+                }
+                first = false;
+            }
+        }
+
+        // 构建WHERE子句（使用主键）
+        buildWhereClauseFromPrimaryKeys(rowData, whereClause);
+
+        sql.append(setClause).append(" WHERE ").append(whereClause);
+        return sql.toString();
+    }
+
+    /**
+     * 生成DELETE SQL语句
+     */
+    private static String generateDeleteSql(String tableName, Map<String, Object> rowData) {
+        StringBuilder sql = new StringBuilder("DELETE FROM ");
+        sql.append(tableName);
+
+        StringBuilder whereClause = new StringBuilder();
+        buildWhereClauseFromPrimaryKeys(rowData, whereClause);
+
+        sql.append(" WHERE ").append(whereClause);
+        return sql.toString();
+    }
+
+    /**
+     * 生成INSERT SQL语句
+     */
+    private static String generateInsertSql(String tableName, Map<String, Object> rowData) {
+        StringBuilder columns = new StringBuilder();
+        StringBuilder values = new StringBuilder();
+
+        boolean first = true;
+        for (Map.Entry<String, Object> entry : rowData.entrySet()) {
+            if (!first) {
+                columns.append(", ");
+                values.append(", ");
+            }
+
+            columns.append(entry.getKey());
+            Object value = entry.getValue();
+            if (value == null) {
+                values.append("NULL");
+            } else {
+                values.append("'").append(value.toString()).append("'");
+            }
+            first = false;
+        }
+
+        return String.format("INSERT INTO %s (%s) VALUES (%s)",
+                tableName, columns.toString(), values.toString());
+    }
+
+    /**
+     * 根据主键构建WHERE子句
+     */
+    private static void buildWhereClauseFromPrimaryKeys(Map<String, Object> rowData, StringBuilder whereClause) {
+        boolean first = true;
+        for (String pk : PRIMARY_KEYS) {
+            if (!first) {
+                whereClause.append(" AND ");
+            }
+            Object pkValue = rowData.get(pk);
+            whereClause.append(pk).append(" = ");
+            if (pkValue == null) {
+                whereClause.append("NULL");
+            } else {
+                whereClause.append("'").append(pkValue.toString()).append("'");
+            }
+            first = false;
+        }
+    }
+
+
+    private static List<Map<String, Object>> getRowSpan(String tableName, Set<String> extraSpans, Connection conn) {
+        List<Map<String, Object>> resultList = new ArrayList<>();
+        List<String[]> allPkValues = new ArrayList<>();
+
+        try {
+            String cateLog = conn.getCatalog();
+            String compareTable = "compare_"+tableName;
+            // 收集所有主键值
+            for (String span : extraSpans) {
+                String diffQuery = String.format(DIFF_COMPARE, cateLog, compareTable, span);
+                try(PreparedStatement statement = conn.prepareStatement(diffQuery);
+                    ResultSet spanResultSet = statement.executeQuery();) {
+                    while (spanResultSet.next()) {
+                        String[] pkValues = new String[PRIMARY_KEYS.size()];
+                        for (int i = 0; i < PRIMARY_KEYS.size(); i++) {
+                            pkValues[i] = spanResultSet.getString(4 + i);
+                        }
+                        allPkValues.add(pkValues);
+                    }
+                }
+            }
+
+            // 使用收集到的主键值查询原始表
+            for (String[] pkValues : allPkValues) {
+                StringBuilder whereClause = new StringBuilder();
+                for (int i = 0; i < PRIMARY_KEYS.size(); i++) {
+                    if (i > 0) {
+                        whereClause.append(" AND ");
+                    }
+                    whereClause.append(PRIMARY_KEYS.get(i))
+                            .append(" = '")
+                            .append(pkValues[i])
+                            .append("'");
+                }
+
+                String originalQuery = String.format(QUERY_COMPARE_SPAN,
+                        "test3",
+                        tableName,
+                        whereClause.toString());
+
+                try(PreparedStatement statement = conn.prepareStatement(originalQuery);
+                    ResultSet originalResultSet = statement.executeQuery();){
+                    if (originalResultSet.next()) {
+                        Map<String, Object> rowData = convertResultSetToMap(originalResultSet);
+                        resultList.add(rowData);
+                    }
+                }
+            }
+
+        } catch (SQLException e) {
+            throw new RuntimeException("查询额外行数据失败: " + e.getMessage(), e);
+        }
+
+        return resultList;
+    }
+
+    // 将结果转成map
+    private static Map<String, Object> convertResultSetToMap(ResultSet rs) throws SQLException {
+        Map<String, Object> rowData = new HashMap<>();
+        ResultSetMetaData metaData = rs.getMetaData();
+        int columnCount = metaData.getColumnCount();
+
+        for (int i = 1; i <= columnCount; i++) {
+            rowData.put(metaData.getColumnName(i), rs.getObject(i));
+        }
+
+        return rowData;
+    }
+
+    // 可有可无
+    private static Set<RowSignature> calculateDifference(Set<RowSignature> set1, Set<RowSignature> set2) {
+        Set<RowSignature> difference = new HashSet<>(set1);
+        difference.removeAll(set2);
+        return difference;
+    }
+
+    private static Set<String> extractPkHashes(Set<RowSignature> diffRows) {
+        Set<String> pkHashes = new HashSet<>();
+        for (RowSignature signature : diffRows) {
+            pkHashes.add(signature.getPkHash());
+        }
+        return pkHashes;
+    }
+
+    private static List<String[]> makeSumRows(Connection conn, String dbName, String compareTblName, String tableName) throws SQLException {
+
+
+        String pkDef = buildIndexDefinition();
+
+        String tempSql = String.format(COMPARE_TABLE,
+                dbName,
+                compareTblName,
+                DEFAULT_SPAN_KEY_SIZE/2,
+                pkDef);
+
+        try(PreparedStatement statement = conn.prepareStatement(tempSql);){
+            statement.executeQuery();
+        }
+
+        String pkStr = String.join(",",PRIMARY_KEYS);
+
+        String colStr = String.join(",",COMPARE_COLUMNS);
+
+        tempSql = String.format(INSERT_TABLE,
+                dbName,
+                compareTblName,
+                pkStr,
+                colStr,
+                pkStr,
+                pkStr,
+                DEFAULT_SPAN_KEY_SIZE,
+                pkStr,
+                dbName,
+                tableName);
+
+        try(PreparedStatement statement = conn.prepareStatement(tempSql);){
+            statement.executeQuery();
+        }
+
+        tempSql = String.format(SUM_TABLE, dbName, compareTblName);
+
+        try (PreparedStatement statement = conn.prepareStatement(tempSql)) {
+            statement.setFetchSize(1000);
+
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<String[]> objectList = new ArrayList<>();
+
+                while (resultSet.next()) {
+                    String[] objects = new String[3];
+                    for (int i = 0; i < 3; i++) {
+                        objects[i] = resultSet.getString(i + 1);
+                    }
+                    objectList.add(objects);
+                }
+
+                return objectList;
+            }
+        }
+    }
+
+
+    // 这里不还原，python的table对象可以反找server对象，我这里需要传连接对象
+    private static void setupCompare(Connection conn1, Connection conn2, String table1, String table2, int spanKeySize, List<String> useIndexes) throws SQLException {
+
+        List<String> diagMsgs =  new ArrayList<>();
+        DatabaseMetaData dbMetaData1 = conn1.getMetaData();
+        DatabaseMetaData dbMetaData2 = conn2.getMetaData();
+        // 拿两张表的主键
+        try(ResultSet set1 = dbMetaData1.getPrimaryKeys(conn1.getCatalog(), conn1.getSchema(),table1);
+            ResultSet set2 = dbMetaData2.getPrimaryKeys(conn2.getCatalog(), conn2.getSchema(),table2)){
+            while (set1.next()){
+                String pk1 = set1.getString("COLUMN_NAME");
+
+                PRIMARY_KEYS.add(pk1);
+                // 两张表主键不相同
+                if(set2.next()){
+                    if(!set1.getString("COLUMN_NAME").equals(pk1)){
+                        throw new RuntimeException(String.format("The specified index %s was not found in table %s",table1,table2));
+                    }
+                }
+                else {
+                    throw new RuntimeException(String.format("The specified index %s was not found in table %s",table1,table2));
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("Indexes are not the same");
+        }
+
+        // 丢弃旧的临时表
+        dropCompareObject(conn1,table1);
+        dropCompareObject(conn2,table2);
+
+        // 获取创表语句
+        String tbl1Table = String.format(COMPARE_TABLE,
+                conn1.getCatalog(),
+                String.format(COMPARE_TABLE_NAME,table1),
+                spanKeySize / 2,
+                buildIndexDefinition());
+
+        String tbl2Table = String.format(COMPARE_TABLE,
+                conn2.getCatalog(),
+                String.format(COMPARE_TABLE_NAME,table2),
+                spanKeySize / 2,
+                buildIndexDefinition());
+
+
+        boolean mustToggle1 = !conn1.getAutoCommit();
+        if(mustToggle1) {conn1.setAutoCommit(true);}
+        boolean mustToggle2 = !conn2.getAutoCommit();
+        if(mustToggle2) {conn2.setAutoCommit(true);}
+
+
+        // 创建临时表
+        try(PreparedStatement statement1 = conn1.prepareStatement(tbl1Table);
+            PreparedStatement statement2 = conn2.prepareStatement(tbl2Table);
+        ){
+            statement1.executeQuery();
+            statement2.executeQuery();
+        }
+
+        if(mustToggle1) conn1.setAutoCommit(false);
+        if(mustToggle2) conn2.setAutoCommit(false);
+
+    }
+
+    private static String buildIndexDefinition() {
+        StringBuilder indexDefn = new StringBuilder();
+
+        for (String primaryKey : PRIMARY_KEYS) {
+            indexDefn.append(primaryKey)
+                    .append(" VARCHAR(255), ");
+        }
+
+        // 移除最后的逗号和空格
+        if (indexDefn.length() > 0) {
+            indexDefn.setLength(indexDefn.length() - 2);
+        }
+
+        return indexDefn.toString();
+    }
+
+    private static void dropCompareObject(Connection conn, String table) {
+        try{
+            boolean toggleServer = !conn.getAutoCommit();
+            if(toggleServer){
+                conn.setAutoCommit(true);
+            }
+            String tTable = String.format(COMPARE_TABLE_NAME,table);
+
+            try(PreparedStatement statement = conn.prepareStatement(String.format(COMPARE_TABLE_DROP,conn.getCatalog(),tTable))){
+                statement.executeQuery();
+            }
+
+            if(toggleServer){
+                conn.setAutoCommit(false);
+            }
+
+        } catch (SQLException e) {
+            return;
+        }
+    }
+
+
+    private static Long CheckSum(Connection conn, String table){
+        String checkSql = "checksum table %s".formatted(table);
+        long checksum = 0;
+
+        try(Statement statement = conn.createStatement();
+            ResultSet rs = statement.executeQuery(checkSql);){
+
+            while (rs.next()) {
+                checksum = rs.getLong("Checksum");
+            }
+            return checksum;
+        }catch (SQLException e){
+            return 0L;
+        }
+
+    }
+
+    public static boolean isBinlogEnabled(Connection conn) throws SQLException {
+        String sql = "SHOW VARIABLES LIKE 'log_bin'";
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            if (rs.next()) {
+                return "ON".equalsIgnoreCase(rs.getString("Value"));
+            }
+            return false;
+        }
+    }
+
+    public static void disableBinlog(Connection conn) throws SQLException {
+        try (Statement stmt = conn.createStatement()) {
+            // 提交当前事务以避免在事务中设置 sql_log_bin 的错误
+            conn.rollback(); // 或 conn.commit()
+            // 关闭二进制日志
+            stmt.execute("SET sql_log_bin = 0");
+        }
+    }
+
+    @Getter
+    @Setter
+    public static class DiffServer{
+        private List<String> first;
+        private List<String> second;
     }
 }

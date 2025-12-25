@@ -13,11 +13,8 @@ import java.util.*;
 @Component
 public class VerifyClient1 {
 
-    private static final char[] HEX_ARRAY = "0123456789abcdef".toCharArray();
-    private static final Charset UTF_8 = StandardCharsets.UTF_8;
     private static final List<String> PRIMARY_KEYS = new ArrayList<>();
     private static final List<String> COMPARE_COLUMNS = new ArrayList<>();
-    private static final List<String> SUM_TABLE_COLUMNS = Arrays.asList("span","cnt","sig");
     private static final int SPAN_KEY_SIZE = 4; // 16位，取MD5的前2个字节
 
     private static final String COMPARE_TABLE_TEMPLATE = """
@@ -545,7 +542,6 @@ public class VerifyClient1 {
         ResultSetMetaData metaData = rs.getMetaData();
         int columnCount = metaData.getColumnCount();
 
-
         for (int i = 1; i <= columnCount; i++) {
             rowData.put(metaData.getColumnName(i), rs.getObject(i));
         }
@@ -631,7 +627,7 @@ public class VerifyClient1 {
 
         for (String primaryKey : PRIMARY_KEYS) {
             indexDefn.append(primaryKey)
-                    .append(" VARCHAR(255), ");  // 假设默认类型，实际应根据具体字段类型确定
+                    .append(" VARCHAR(255), ");
         }
 
         // 移除最后的逗号和空格
