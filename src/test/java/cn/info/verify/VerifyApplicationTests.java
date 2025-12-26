@@ -1,15 +1,11 @@
 package cn.info.verify;
 
-import com.github.difflib.DiffUtils;
-import com.github.difflib.patch.Patch;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.List;
 
 @SpringBootTest
 class VerifyApplicationTests {
@@ -53,6 +49,12 @@ class VerifyApplicationTests {
             throw new RuntimeException(e);
         }
 
+    }
+
+    @Test
+    void test() throws SQLException {
+        DbCompare dbCompare = new DbCompare();
+        System.out.println(dbCompare.databaseCompare("1","2","test3","test4",null));
     }
 
 }

@@ -13,60 +13,60 @@ import java.sql.*;
 import java.util.*;
 
 @Component
-public class dbCompareUtils {
+public class DbCompareUtils {
 
-    private final static int DEFAULT_SPAN_KEY_SIZE = 8;
+    private final static int DEFAULT_SPAN_KEY_SIZE = 4;
     private static final List<String> PRIMARY_KEYS = new ArrayList<>();
     private static final List<String> COMPARE_COLUMNS = new ArrayList<>();
 
     private static final String COMPARE_TABLE = """
-        CREATE TEMPORARY TABLE %s.%s (
-            compare_sign binary(16) NOT NULL,
-            pk_hash binary(16) NOT NULL,
-            span binary(%d) NOT NULL,
-            %s,
-            INDEX span_key (span, pk_hash));
-    """;
+                CREATE TEMPORARY TABLE %s.%s (
+                    compare_sign binary(16) NOT NULL,
+                    pk_hash binary(16) NOT NULL,
+                    span binary(%d) NOT NULL,
+                    %s,
+                    INDEX span_key (span, pk_hash));
+            """;
 
     private static final String INSERT_TABLE = """
-        INSERT INTO %s.%s
-           (compare_sign, pk_hash, span, %s)
-           SELECT
-           UNHEX(MD5(CONCAT_WS('/', %s))),
-           UNHEX(MD5(CONCAT_WS('/', %s))),
-           UNHEX(LEFT(MD5(CONCAT_WS('/', %s)), %d)),
-           %s
-           FROM %s.%s;
-    """;
+                INSERT INTO %s.%s
+                   (compare_sign, pk_hash, span, %s)
+                   SELECT
+                   UNHEX(MD5(CONCAT_WS('/', %s))),
+                   UNHEX(MD5(CONCAT_WS('/', %s))),
+                   UNHEX(LEFT(MD5(CONCAT_WS('/', %s)), %d)),
+                   %s
+                   FROM %s.%s;
+            """;
 
     private static final String SUM_TABLE = """
-        SELECT HEX(span) as span, COUNT(*) as cnt,
-            CONCAT(SUM(CONV(SUBSTRING(HEX(compare_sign),1,8),16,10)),
-            SUM(CONV(SUBSTRING(HEX(compare_sign),9,8),16,10)),
-            SUM(CONV(SUBSTRING(HEX(compare_sign),17,8),16,10)),
-            SUM(CONV(SUBSTRING(HEX(compare_sign),25,8),16,10))) as sig
-        FROM %s.%s
-        GROUP BY span
-    """;
+                SELECT HEX(span) as span, COUNT(*) as cnt,
+                    CONCAT(SUM(CONV(SUBSTRING(HEX(compare_sign),1,8),16,10)),
+                    SUM(CONV(SUBSTRING(HEX(compare_sign),9,8),16,10)),
+                    SUM(CONV(SUBSTRING(HEX(compare_sign),17,8),16,10)),
+                    SUM(CONV(SUBSTRING(HEX(compare_sign),25,8),16,10))) as sig
+                FROM %s.%s
+                GROUP BY span
+            """;
 
     private static final String DIFF_COMPARE = """
-        SELECT * FROM %s.%s
-            WHERE span = UNHEX('%s') ORDER BY pk_hash
-    """;
+                SELECT * FROM %s.%s
+                    WHERE span = UNHEX('%s') ORDER BY pk_hash
+            """;
 
     private static final String DIFF_COMPARE_BATCH = """
-        SELECT * FROM %s.%s
-            WHERE span IN (%s) ORDER BY span, pk_hash
-    """;
+                SELECT * FROM %s.%s
+                    WHERE span IN (%s) ORDER BY span, pk_hash
+            """;
 
 
     private static final String QUERY_COMPARE_SPAN = """
-        SELECT * FROM %s.%s WHERE %s
-    """;
+                SELECT * FROM %s.%s WHERE %s
+            """;
 
     private static final String COMPARE_TABLE_DROP = """
-        DROP TABLE %s.%s;
-    """;
+                DROP TABLE %s.%s;
+            """;
 
     private static final String COMPARE_TABLE_NAME = "compare_%s";
 
@@ -74,9 +74,9 @@ public class dbCompareUtils {
     }
 
 
-    public static List<List<String>> getCommonObjects(Connection conn1,Connection conn2, boolean printList, Map<String,Object> options) throws SQLException {
+    public static List<List<String>> getCommonObjects(Connection conn1, Connection conn2, boolean printList, Map<String, Object> options) throws SQLException {
 
-        if(Objects.isNull(options)) options = new HashMap<>();
+        if (Objects.isNull(options)) options = new HashMap<>();
 
         List<String> db1Objects = getObjects(conn1, conn1.getCatalog(), options);
         List<String> db2Objects = getObjects(conn2, conn2.getCatalog(), options);
@@ -96,18 +96,17 @@ public class dbCompareUtils {
 
         Collections.sort(inBoth);
 
-        if(printList){
+        if (printList) {
             String server1Str = "server1." + conn1.getCatalog();
             String server2Str;
-            if(conn1.equals(conn2)){
+            if (conn1.equals(conn2)) {
                 server2Str = "server1." + conn2.getCatalog();
-            }
-            else {
+            } else {
                 server2Str = "server2." + conn2.getCatalog();
             }
 
-            printMissingList(inDb1NotDb2,server1Str,server2Str);
-            printMissingList(inDb2NotDb1,server2Str,server1Str);
+            printMissingList(inDb1NotDb2, server1Str, server2Str);
+            printMissingList(inDb2NotDb1, server2Str, server1Str);
         }
         List<List<String>> result = new ArrayList<>();
         result.add(inBoth);
@@ -119,11 +118,11 @@ public class dbCompareUtils {
 
     public static boolean printMissingList(List<String> itemList, String first, String second) {
 
-        if(itemList.size() == 0){
+        if (itemList.size() == 0) {
             return false;
         }
-        System.out.printf("# WARNING: Objects in %s but not in %s:",first, second);
-        for(String item : itemList){
+        System.out.printf("# WARNING: Objects in %s but not in %s:", first, second);
+        for (String item : itemList) {
             String[] parts = item.split(":");
             String type = parts[0];
             String name = parts.length > 1 ? parts[1] : "unknown";
@@ -136,9 +135,9 @@ public class dbCompareUtils {
 
     public static List<String> diffObjects(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Map<String, Object> options, String objType) throws SQLException {
 
-        // options可以设置成一个具体的类，因为可设置的总数是固定的
-        boolean quiet = (boolean) options.getOrDefault("quiet",false);
-        String diffType = (String) options.getOrDefault("diffType","unified");
+        // options可以设置成一个具体的类，因为可设置的参数是固定的
+        boolean quiet = (boolean) options.getOrDefault("quiet", false);
+        String diffType = (String) options.getOrDefault("diffType", "unified");
         int width = (int) options.getOrDefault("width", 75);
         String direction = (String) options.getOrDefault("changes-for", "");
         boolean reverse = (boolean) options.getOrDefault("reverse", false);
@@ -146,9 +145,9 @@ public class dbCompareUtils {
         boolean compactDiff = (boolean) options.getOrDefault("compact", false);
 
         String object1Create = getCreateObject(db1Conn, obj1, options, objType);
-        String object2Create = getCreateObject(db1Conn, obj1, options, objType);
+        String object2Create = getCreateObject(db2Conn, obj2, options, objType);
 
-        if(objType.equals("database") && obj1.equals(obj2)){
+        if (objType.equals("database") && obj1.equals(obj2)) {
             String[] quotes = {"'", "\"", "`"};
 
             // 从数据库名中移除引号字符
@@ -166,8 +165,8 @@ public class dbCompareUtils {
             }
         }
 
-        if(!quiet) {
-            System.out.printf("# Comparing %s to %s%n",obj1, obj2);
+        if (!quiet) {
+            System.out.printf("# Comparing %s to %s%n", obj1, obj2);
             //后面有输出空格，这里忽略了
         }
 
@@ -176,14 +175,14 @@ public class dbCompareUtils {
 
 
         List<String> diffServer1 = new ArrayList<>();
-        List<String> diffServer2= new ArrayList<>();
+        List<String> diffServer2 = new ArrayList<>();
         List<String> transformServer1 = new ArrayList<>();
-        List<String> transformServer2= new ArrayList<>();
+        List<String> transformServer2 = new ArrayList<>();
 
 
         // 支持选择方向或反转当前方向,这里的server1代表以server2为生产库，server1是容灾库
-        if(direction.equals("server1") || direction.isEmpty() || reverse){
-            diffServer1 = getDiff(object1CreateList,object2CreateList,obj1,obj2,diffType,compactDiff);
+        if (direction.equals("server1") || direction.isEmpty() || reverse) {
+            diffServer1 = getDiff(object1CreateList, object2CreateList, obj1, obj2, diffType, compactDiff);
 
             if (diffType.equals("sql") && diffServer1 != null) {
                 transformServer1 = getTransform(db1Conn, db2Conn,
@@ -192,8 +191,8 @@ public class dbCompareUtils {
             }
         }
 
-        if(direction.equals("server2") || reverse){
-            diffServer2 = getDiff(object2CreateList,object1CreateList,obj2,obj1,diffType,compactDiff);
+        if (direction.equals("server2") || reverse) {
+            diffServer2 = getDiff(object2CreateList, object1CreateList, obj2, obj1, diffType, compactDiff);
 
             if (diffType.equals("sql") && diffServer2 != null) {
                 transformServer2 = getTransform(db2Conn, db1Conn,
@@ -204,31 +203,33 @@ public class dbCompareUtils {
         // 用于提示用户的差异语句
         List<String> diffList = new ArrayList<>();
 
-        if(direction.equals("server1") || direction.isEmpty()) {
-            diffList = buildDiffList(db1Conn, db2Conn, transformServer1, transformServer2,
-                    "server1", "server2" ,options);
-        }
-        else {
-            diffList = buildDiffList(db2Conn, db1Conn, transformServer2, transformServer1,
-                    "server2", "server1" ,options);
+        if (direction.equals("server1") || direction.isEmpty()) {
+            diffList = buildDiffList(diffServer1, diffServer2, transformServer1, transformServer2,
+                    "server1", "server2", options);
+        } else {
+            diffList = buildDiffList(diffServer2, diffServer1, transformServer2, transformServer1,
+                    "server2", "server1", options);
         }
 
-        // 三个变量分别对应sameTableDef， tblOptsDiff， samePartDef
+        // 三个变量分别对应same_table_def， tbl_opts_diff， same_part_def
+        ImmutableTriple<Boolean, List<String>, Boolean> structureCheck = new ImmutableTriple<>(false, null, false);
+
+        // 这是完整的表定义
         Definition diffDefinition = new Definition();
 
-        if (objType.equals("table")){
-            diffDefinition = checkTablesStructure(db1Conn,db2Conn, obj1, obj2, options, diffType);
+        if (objType.equals("TABLE")) {
+            structureCheck = checkTablesStructure(db1Conn, db2Conn, obj1, obj2, options, diffType);
         }
 
         // todo ansi_quotes的实现
-        if(!diffList.isEmpty() && diffDefinition.getBasicDef().length > 0 && !diffDefinition.getPartDef().isEmpty()){
+        if (!diffList.isEmpty() && structureCheck.getLeft() && structureCheck.getRight()) {
             System.out.println("[PASS]");
             return null;
         }
 
-        if(!diffList.isEmpty() && direction.isEmpty() && diffDefinition.getBasicDef().length > 0
-                && diffDefinition.getColDef().isEmpty()) {
-            if(quiet) {
+        if (!diffList.isEmpty() && direction.isEmpty() && structureCheck.getLeft()
+                && structureCheck.getMiddle().isEmpty()) {
+            if (!quiet) {
                 System.out.println("[PASS]");
                 System.out.println("# WARNING: The tables structure is the same, but the " +
                         "columns order is different. Use --change-for to take the " +
@@ -237,44 +238,44 @@ public class dbCompareUtils {
             return null;
         }
 
-        if (diffType.equals("sql") &&
-                ( (direction.equals("server1") && transformServer1.isEmpty() && !diffServer1.isEmpty() )
-                        || (direction.equals("server2") && transformServer2.isEmpty() && !diffServer2.isEmpty() ))){
+        if (diffType.equals("SQL") &&
+                ((direction.equals("server1") && transformServer1.isEmpty() && !diffServer1.isEmpty()) ||
+                        (direction.equals("server2") && transformServer2.isEmpty() && !diffServer2.isEmpty()))) {
 
-            if(!quiet) System.out.println("[FAIL]");
-            for(String line : diffList){
+            if (!quiet) System.out.println("[FAIL]");
+            for (String line : diffList) {
                 System.out.println(line);
             }
             System.out.printf("# WARNING: Could not generate SQL statements for differences " +
                     "between %s and %s. No changes required or not supported " +
-                    "difference.%n",obj1,obj2);
+                    "difference.%n", obj1, obj2);
             return diffList;
         }
 
-        if(!diffList.isEmpty()){
-            if(!quiet){
+        if (!diffList.isEmpty()) {
+            if (!quiet) {
                 System.out.println("[FAIL]");
             }
 
-            if(!quiet || (!(boolean) options.getOrDefault("suppress_sql",false) && diffType.equals("sql"))){
-                for(String line : diffList){
+            if (!quiet || (!(boolean) options.getOrDefault("suppress_sql", false) && diffType.equals("sql"))) {
+                for (String line : diffList) {
                     System.out.println(line);
                 }
 
-                if(diffDefinition.getPartDef().isEmpty()){
+                if (diffDefinition.getPartDef().isEmpty()) {
                     System.out.println("# WARNING: Partition changes were not generated (not supported).");
                 }
             }
             return diffList;
         }
 
-        if(!quiet){
+        if (!quiet) {
             System.out.println("[PASS]");
-            if(skipTableOpts && diffDefinition.getBasicDef().length>0){
+            if (skipTableOpts && diffDefinition.getBasicDef().length > 0) {
                 System.out.println("# WARNING: Table options are ignored and differences were found:");
 
-                for(String diff : diffDefinition.getBasicDef()){
-                    System.out.printf("# %s",diff);
+                for (String diff : diffDefinition.getBasicDef()) {
+                    System.out.printf("# %s", diff);
                 }
             }
         }
@@ -282,30 +283,100 @@ public class dbCompareUtils {
         return null;
     }
 
-    private static Definition checkTablesStructure(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Map<String, Object> options, String diffType) {
+    private static ImmutableTriple<Boolean, List<String>, Boolean> checkTablesStructure(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Map<String, Object> options, String diffType) {
 
-        return new Definition();
+        boolean compactDiff = (boolean) options.getOrDefault("compact", false);
+
+        // 这是完整的表定义,模拟获取两个table对象
+        Definition diffDefinition1 = new Definition(1);
+        Definition diffDefinition2 = new Definition(2);
+
+        // 获取表选项
+        // 貌似不复杂，show create table的最后一行split空格分割
+        List<String> table1Opts = diffDefinition1.getTableOptions();
+        List<String> table2Opts = diffDefinition2.getTableOptions();
+        List<String> diff = getDiff(table1Opts,table2Opts,obj1,obj2,diffType,compactDiff);
+
+        // 检查表定义
+        List<List<String>> table1Cols = diffDefinition1.getColDef();
+        List<List<String>> table2Cols = diffDefinition2.getColDef();
+        boolean sameColsDef = new HashSet(table1Cols).equals(new HashSet(table2Cols));
+
+        // 检查表分区
+        List<List<String>> table1Part = diffDefinition1.getPartDef();
+        List<List<String>> table2Part = diffDefinition2.getPartDef();
+        boolean samePartitionOpts = new HashSet(table1Part).equals(new HashSet(table2Part));
+
+
+        return new ImmutableTriple<>(sameColsDef, diff, samePartitionOpts);
     }
 
-    public  static List<String> buildDiffList(Connection db1Conn, Connection db2Conn, List<String> transformServer1, List<String> transformServer2, String server1, String server2, Map<String, Object> options) {
+    public static List<String> buildDiffList(List<String> diff1, List<String> diff2, List<String> transform1, List<String> transform2, String first, String second, Map<String, Object> options) {
 
-        return new ArrayList<>();
+        if(diff1.isEmpty()) return new ArrayList<>();
+
+        boolean reverse = (boolean) options.getOrDefault("reverse", false);
+        List<String> diffList = new ArrayList<>();
+        String diffType = (String) options.getOrDefault("diff_type", "sql");
+        if(diffType.equals("sql")) {
+            if(transform1.isEmpty()) {
+                diffList.add("\n# WARNING: Cannot generate SQL statements for these objects.");
+                diffList.add("# Check the difference output for other discrepencies.");
+                diffList.addAll(diff1);
+            }
+            else {
+                diffList.add(String.format("# Transformation for --changes-for=%s:\n#\n",first));
+                diffList.addAll(transform1);
+                diffList.add("");
+                if (reverse && !(transform2.isEmpty())) {
+                    diffList.add(String.format("#\n# Transformation for reverse changes (--changes-for=%s):\n#" ,second));
+                    for (String row : transform2) {
+                        String[] subRows = row.split("\n");
+                        for (String subRow : subRows) {
+                            diffList.add(String.format("# %s", subRow));
+                        }
+
+                    }
+                    diffList.add("#\n");
+                }
+            }
+        }
+        else {
+            if(!(boolean) options.getOrDefault("data_diff",false)) {
+                diffList.add(String.format("# Object definitions differ. (--changes-for=%s)\n#\n",first));
+            }
+            diffList.addAll(diff1);
+
+            if(reverse && !diff2.isEmpty()) {
+                diffList.add("");
+                if(!(boolean) options.getOrDefault("data_diff",false)){
+                    diffList.add(String.format("#\n# Definition diff for reverse changes " +
+                            "(--changes-for=%s):\n#", second));
+                }
+                for(String row : diff2){
+                    diffList.add(String.format("# %s", row));
+                }
+                diffList.add("#\n");
+            }
+        }
+
+        return diffList;
     }
 
     private static List<String> getTransform(Connection db1Conn, Connection db2Conn, String name1, String name2, Map<String, Object> options, String objType) throws SQLException {
 
-        if(name1.isEmpty() || objType.equals("database")) {
+        if (name1.isEmpty() || objType.equals("database")) {
             name1 = db1Conn.getCatalog();
             name1 = db2Conn.getCatalog();
         }
 
-        Definition obj1 = getObjectDefinition(db1Conn.getCatalog(),name1,objType,1);
-        Definition obj2 = getObjectDefinition(db2Conn.getCatalog(),name2,objType,2);
+        Definition obj1 = getObjectDefinition(db1Conn.getCatalog(), name1, objType, 1);
+        Definition obj2 = getObjectDefinition(db2Conn.getCatalog(), name2, objType, 2);
 
         List<String> transformStr = new ArrayList<>();
 
         SQLTransformer xform = new SQLTransformer(db1Conn.getCatalog(), db2Conn.getCatalog(),
-                obj1, obj2, objType, (int)options.getOrDefault("verbosity",0) ,options);
+                obj1, obj2, objType, (int) options.getOrDefault("verbosity", 0), options);
         transformStr = xform.transformDefinition();
 
         return transformStr;
@@ -313,9 +384,10 @@ public class dbCompareUtils {
 
     /**
      * 获取对象定义(这个参数num没有意义，只是区分模拟的对象)
+     *
      * @return String[] basicDef;
-     *     List<String[]> colDef;
-     *     List<String[]> partDef;
+     * List<String[]> colDef;
+     * List<String[]> partDef;
      */
     private static Definition getObjectDefinition(String catalog, String name1, String objType, int num) {
 
@@ -331,25 +403,24 @@ public class dbCompareUtils {
     private static List<String> getDiff(List<String> object1CreateList, List<String> object2CreateList, String obj1, String obj2, String diffType, boolean compactDiff) {
 
         List<String> diffStr = new ArrayList<>();
-        Patch<String> patch =  DiffUtils.diff(object1CreateList,object2CreateList);
+        Patch<String> patch = DiffUtils.diff(object1CreateList, object2CreateList);
 
-        if(Set.of("unified", "sql").contains(diffType)) {
-            List<String> unifiedDiff = UnifiedDiffUtils.generateUnifiedDiff(obj1,obj2, object1CreateList,patch,0);
+        if (Set.of("unified", "sql").contains(diffType)) {
+            List<String> unifiedDiff = UnifiedDiffUtils.generateUnifiedDiff(obj1, obj2, object1CreateList, patch, 0);
 
-            for(String line : unifiedDiff) {
-                if(compactDiff){
-                    if(line.startsWith("@@ ")) {
+            for (String line : unifiedDiff) {
+                if (compactDiff) {
+                    if (line.startsWith("@@ ")) {
                         diffStr.add(line.strip());
-                    }
-                    else {
+                    } else {
                         diffStr.add(line.strip());
                     }
                 }
             }
         }
         // 这个工具貌似只支持unified，后面的先放一下
-        else if(diffType.equals("context")){
-            List<String> unifiedDiff = UnifiedDiffUtils.generateUnifiedDiff(obj1,obj2, object1CreateList,patch,0);
+        else if (diffType.equals("context")) {
+            List<String> unifiedDiff = UnifiedDiffUtils.generateUnifiedDiff(obj1, obj2, object1CreateList, patch, 0);
         }
 
 
@@ -389,30 +460,29 @@ public class dbCompareUtils {
         boolean quiet = (boolean) options.getOrDefault("quiet", false);
 
         // 原代码是当type是database时， 将type和name都设置成database
-        if (obj.isEmpty() || objType.equals("DATABASE")){
+        if (obj.isEmpty() || objType.equals("DATABASE")) {
             obj = dbConn.getCatalog();
         }
 
         // 这里是db.get_create_statement
-        String showCreateSql = String.format("SHOW CREATE %s %s",objType,obj);
+        String showCreateSql = String.format("SHOW CREATE %s %s", objType, obj);
 
         try (Statement statement = dbConn.createStatement();
              ResultSet rs = statement.executeQuery(showCreateSql);) {
 
             String createStmt = "";
-            if (objType.equals("table") || objType.equals("view")) {
+            if (objType.equals("TABLE") || objType.equals("VIEW") || objType.equals("DATABASE")) {
                 // create table语句在第二位
                 if (rs.next()) createStmt = rs.getString(2);
             } else {
                 if (rs.next()) createStmt = rs.getString(3);
             }
 
-            if(verbosity > 0 && !quiet) {
-                if(!obj.isEmpty()) {
-                    System.out.printf("\n# Definition for object %s.%s:%n",dbConn.getCatalog(),obj);
-                }
-                else {
-                    System.out.printf("\n# Definition for object %s:%n",dbConn.getCatalog());
+            if (verbosity > 0 && !quiet) {
+                if (!obj.isEmpty()) {
+                    System.out.printf("\n# Definition for object %s.%s:%n", dbConn.getCatalog(), obj);
+                } else {
+                    System.out.printf("\n# Definition for object %s:%n", dbConn.getCatalog());
                 }
 
                 System.out.println(createStmt);
@@ -425,13 +495,14 @@ public class dbCompareUtils {
     /**
      * 原方法返回的是三个列表，直接在主函数中处理
      */
-    public static void getCommonList(){}
+    public static void getCommonList() {
+    }
 
     /**
      * 拼接table_name 和 table_type
      * @return table_name:table_type
      */
-    public static List<String> getObjects(Connection connection, String databaseName, Map<String,Object> options) throws SQLException {
+    public static List<String> getObjects(Connection connection, String databaseName, Map<String, Object> options) throws SQLException {
         List<String> objects = new ArrayList<>();
 
         // 这里的options完全没用上
@@ -439,12 +510,44 @@ public class dbCompareUtils {
 
         // 获取表
         DatabaseMetaData metaData = connection.getMetaData();
-        ResultSet tables = metaData.getTables(databaseName, null, null,
-                new String[]{"TABLE", "VIEW", "PROCEDURE", "FUNCTION"});
-
-        while (tables.next()) {
-            objects.add(tables.getString("TABLE_TYPE")+":"+tables.getString("TABLE_NAME"));
+        try(ResultSet tables = metaData.getTables(databaseName, null, null,
+                new String[]{"TABLE", "VIEW"});) {
+            while (tables.next()) {
+                objects.add(tables.getString("TABLE_TYPE") + ":" + tables.getString("TABLE_NAME"));
+            }
         }
+
+        try(ResultSet functions = metaData.getFunctions(databaseName, null, null);) {
+            while (functions.next()) {
+                objects.add("FUNCTION:"+functions.getString("FUNCTION_NAME"));
+            }
+        }
+
+        try(ResultSet procedure = metaData.getProcedures(databaseName, null, null);) {
+            while (procedure.next()) {
+                String name = procedure.getString("PROCEDURE_NAME");
+                boolean found = false;
+                for(String obj :objects){
+                    if(obj.contains(name)) {
+                        found = true;
+                        break;
+                    }
+
+                }
+                if(!found) objects.add("PROCEDURE:"+name);
+            }
+        }
+
+//        List<String> objs = Arrays.asList("EVENT:evt_daily_cleanup",
+//                "FUNCTION:calculate_total",
+//                "FUNCTION:format_date",
+//                "PROCEDURE:cleanup_old_data",
+//                "PROCEDURE:update_stats",
+//                "TABLE:role",
+//                "TABLE:user",
+//                "TRIGGER:trg_orders_insert",
+//                "VIEW:customer_summary",
+//                "TABLE:orders");
 
         // 对结果进行排序
         Collections.sort(objects);
@@ -452,60 +555,58 @@ public class dbCompareUtils {
         return objects;
     }
 
-    public static DiffServer checkConsistency(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Map<String, Object> options, dbCompare.Reporter reporter) throws SQLException {
-        if(options == null){
+    public static DiffServer checkConsistency(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Map<String, Object> options, DbCompare.Reporter reporter) throws SQLException {
+        if (options == null) {
             options = new HashMap<>();
         }
         int spanKeySize = (int) options.getOrDefault("span_key_size", DEFAULT_SPAN_KEY_SIZE);
-        List<String> useIndexes = (List<String>) options.getOrDefault("use_indexes",null);
+        List<String> useIndexes = (List<String>) options.getOrDefault("use_indexes", null);
         String direction = (String) options.getOrDefault("changes-for", "server1");
         boolean reverse = (boolean) options.getOrDefault("reverse", false);
 
-        if(reporter != null){
-            reporter.reportObject("","- Compare table checksum");
+        if (reporter != null) {
+            reporter.reportObject("", "- Compare table checksum");
             reporter.reportState("");
             reporter.reportState("");
         }
-        if(!(boolean) options.get("no_checksum_table")){
+        if (Objects.isNull(options.get("no_checksum_table")) || !(boolean) options.get("no_checksum_table")) {
             Long checksum1 = CheckSum(db1Conn, obj1);
             Long checksum2 = CheckSum(db2Conn, obj2);
 
             // 这里没有err，就用checksum1 == 0来判断了
-            if(checksum1 == 0 || checksum2 == 0){
+            if (checksum1 == 0 || checksum2 == 0) {
                 throw new SQLException(String.format("Error executing CHECKSUM TABLE on %s:%s or %s:%s",
                         db1Conn.getCatalog(), obj1, db2Conn.getCatalog(), obj2));
             }
 
-            if(checksum1.equals(checksum2)){
-                if(reporter != null){
+            if (checksum1.equals(checksum2)) {
+                if (reporter != null) {
                     reporter.reportState("pass");
                 }
                 return null;
-            }
-            else{
-                if(reporter != null){
+            } else {
+                if (reporter != null) {
                     reporter.reportState("FAIL");
                 }
             }
-        }
-        else if(reporter != null){
+        } else if (reporter != null) {
             reporter.reportState("SKIP");
         }
 
         // todo 通过用户设置的index进行后续的数据一致性检验操作
         //unq_use_indexes, table1_use_indexes, table2_use_indexes
 
-        //检查二进制日志状态
+        // 检查二进制日志状态
         boolean binlogServer1 = false;
         boolean binlogServer2 = false;
-        if ((boolean) options.getOrDefault("toggle_binlog",false)){
+        if ((boolean) options.getOrDefault("toggle_binlog", false)) {
             binlogServer1 = isBinlogEnabled(db1Conn);
             binlogServer2 = isBinlogEnabled(db2Conn);
-            if(binlogServer1){
+            if (binlogServer1) {
                 db1Conn.rollback();
                 disableBinlog(db1Conn);
             }
-            if(binlogServer2){
+            if (binlogServer2) {
                 db2Conn.commit();
                 disableBinlog(db2Conn);
             }
@@ -514,16 +615,19 @@ public class dbCompareUtils {
         List<String> dataDiffs1 = new ArrayList<>();
         List<String> dataDiffs2 = new ArrayList<>();
 
-        if(reporter != null){
-            reporter.reportObject("","- Find row differences");
+        if (reporter != null) {
+            reporter.reportObject("", "- Find row differences");
             reporter.reportState("");
             reporter.reportState("");
         }
 
+        // 去除前面的database
+        obj1 = obj1.split("\\.")[1];
+        obj2 = obj2.split("\\.")[1];
         // 这里还应该有个使用 用户输入的index的操作
         setupCompare(db1Conn, db2Conn, obj1, obj2, spanKeySize, useIndexes);
 
-        String compareTblName = "compare_"+obj1;
+        String compareTblName = "compare_" + obj1;
 
         // 填充比较表，并从每个表中检索行
         List<String[]> tbl1Hash = makeSumRows(db1Conn, db1Conn.getCatalog(), compareTblName, obj1);
@@ -541,14 +645,14 @@ public class dbCompareUtils {
         // 计算仅在set2中的元素
         in2Not1.removeAll(same);
 
-        if(!in1Not2.isEmpty() || !in2Not1.isEmpty() ){
+        if (!in1Not2.isEmpty() || !in2Not1.isEmpty()) {
             List<String> tableDiffs1 = new ArrayList<>();
             List<String> tableDiffs2 = new ArrayList<>();
-            for(String[] str : in1Not2){
+            for (String[] str : in1Not2) {
                 tableDiffs1.add(str[0]);
             }
 
-            for(String[] str : in2Not1){
+            for (String[] str : in2Not1) {
                 tableDiffs2.add(str[0]);
             }
 
@@ -556,34 +660,21 @@ public class dbCompareUtils {
             Set<String> extra2 = new HashSet<>(tableDiffs2);
             Set<String> extra1 = new HashSet<>(tableDiffs1);
 
-            // common是原代码中的changed_rows
             changedRows.retainAll(extra2);
             extra1.removeAll(changedRows);
             extra2.removeAll(changedRows);
-
-            List<SpanData> fullSpanData1 = new ArrayList<>();
-            List<SpanData> fullSpanData2 = new ArrayList<>();
-
-            List<Map<String,Object>> changedIn1 = new ArrayList<>();
-            List<Map<String,Object>> extraIn1 = new ArrayList<>();
-            List<Map<String,Object>> extraIn2 = new ArrayList<>();
 
             db1Conn.setAutoCommit(false);
             db2Conn.setAutoCommit(false);
 
             // 这里是后续的整个_generate_data_diff_output
-
-            if(direction.equals("server1") || reverse){
-                dataDiffs1 = generateDataDiffOutput(new ImmutableTriple<>(changedRows, extra1, extra2), db1Conn, db2Conn,obj1, obj2, useIndexes, options);
+            if (direction.equals("server1") || reverse) {
+                dataDiffs1 = generateDataDiffOutput(new ImmutableTriple<>(changedRows, extra1, extra2), db1Conn, db2Conn, obj1, obj2, useIndexes, options);
             }
 
-            if(direction.equals("server2") || reverse){
+            if (direction.equals("server2") || reverse) {
                 dataDiffs2 = generateDataDiffOutput(new ImmutableTriple<>(changedRows, extra2, extra1), db2Conn, db1Conn, obj2, obj1, useIndexes, options);
             }
-
-            // common是span的集合，span来自于pk_hash，即使span相同，pk_hash很可能是不同的，pk_hash的变动会影响行数据的hash，反之则不一定
-            // mysql先是判断了行数据的hash，在判断pk_hash具体是多了，不变还是少了，如果要准确找出所有更改行，这是必须的
-
 
         }
         if (binlogServer1) {
@@ -619,9 +710,9 @@ public class dbCompareUtils {
             Connection dbConn1, Connection dbConn2,
             String obj1, String obj2, List<String> useIndexes, Map<String, Object> options) throws SQLException {
 
-        String difftype = (String) options.getOrDefault("difftype", "unified");
+        String diffType = (String) options.getOrDefault("difftype", "unified");
         String fmt = (String) options.getOrDefault("format", "grid");
-        boolean compact_diff = (boolean) options.getOrDefault("compact", false);
+        boolean compactDiff = (boolean) options.getOrDefault("compact", false);
 
         Set<String> changedRows = immutableTriple.getLeft();
         Set<String> extra1 = immutableTriple.getMiddle();
@@ -629,36 +720,54 @@ public class dbCompareUtils {
 
         List<String> dataDiffs = new ArrayList<>();
 
-        if(changedRows.size() > 0){
+        ImmutablePair<List<Map<String, Object>>, List<Map<String, Object>>> tbl1Rows = null;
+        ImmutablePair<List<Map<String, Object>>, List<Map<String, Object>>> tbl2Rows = null;
+
+
+        List<Map<String, Object>> changedIn1 = new ArrayList<>();
+        List<Map<String, Object>> changedIn2 = new ArrayList<>();
+        List<Map<String, Object>> extraIn1 = new ArrayList<>();
+        List<Map<String, Object>> extraIn2 = new ArrayList<>();
+
+        if (changedRows.size() > 0) {
 
             dataDiffs.add("# Data differences found among rows:");
 
             ImmutablePair<ImmutablePair<List<Map<String, Object>>, List<Map<String, Object>>>, ImmutablePair<List<Map<String, Object>>, List<Map<String, Object>>>>
                     tblRow = getChangedRowsSpan(dbConn1, obj1, dbConn2, obj2, changedRows, useIndexes);
 
-            ImmutablePair<List<Map<String, Object>>, List<Map<String, Object>>> tbl1Rows = tblRow.getLeft();
-            ImmutablePair<List<Map<String, Object>>, List<Map<String, Object>>> tbl2Rows = tblRow.getRight();
-
+            tbl1Rows = tblRow.getLeft();
+            tbl2Rows = tblRow.getRight();
 
         }
 
-        if(extra1.size() > 0){
-            List<Map<String, Object>> resultList = getRowSpan(obj1,extra1,dbConn1);
+        if (!Objects.isNull(tbl1Rows)) {
+            changedIn1.addAll(tbl1Rows.getLeft());
+            extraIn1.addAll(tbl1Rows.getRight());
+        }
+        if (!Objects.isNull(tbl2Rows)) {
+            changedIn2.addAll(tbl2Rows.getLeft());
+            extraIn2.addAll(tbl2Rows.getRight());
+        }
+
+        if (extra1.size() > 0) {
+            List<Map<String, Object>> resultList = getRowSpan(obj1, extra1, dbConn1);
             extraIn1.addAll(resultList);
         }
 
-        if(extra2.size() > 0){
-            List<Map<String, Object>> resultList = getRowSpan(obj2,extra2,dbConn2);
+        if (extra2.size() > 0) {
+            List<Map<String, Object>> resultList = getRowSpan(obj2, extra2, dbConn2);
             extraIn2.addAll(resultList);
         }
 
         // 如果changedIn1不为空 表示需要 update table2 ，extraIn1 需要table2 insert， extraIn2 需要table2 delete
-        if(!changedIn1.isEmpty() || !extraIn1.isEmpty() || !extraIn2.isEmpty()){
-            List<String> fixSqlStatements = generateFixSqlStatements(changedIn1, extraIn1, extraIn2, obj2);
+        if (!changedIn1.isEmpty() || !changedIn2.isEmpty() || !extraIn1.isEmpty() || !extraIn2.isEmpty()) {
+            List<String> fixSql = generateFixSql(changedIn1, extraIn1, extraIn2, obj2);
 
-            for(String sql : fixSqlStatements) {
-                System.out.println(sql);
-            }
+            dataDiffs.addAll(fixSql);
+//            for (String sql : fixSql) {
+//                System.out.println(sql);
+//            }
         }
 
         return dataDiffs;
@@ -672,18 +781,18 @@ public class dbCompareUtils {
 
         String qTblName1 = "compare_" + obj1;
         String qTblName2 = "compare_" + obj2;
-        for(String str: changedRows){
-            try(PreparedStatement statement = db1Conn.prepareStatement(
-                    String.format(DIFF_COMPARE,db1Conn.getCatalog(),qTblName1,str));){
+        for (String str : changedRows) {
+            try (PreparedStatement statement = db1Conn.prepareStatement(
+                    String.format(DIFF_COMPARE, db1Conn.getCatalog(), qTblName1, str));) {
                 statement.setFetchSize(100);
                 statement.setFetchDirection(ResultSet.FETCH_FORWARD);
-                try(ResultSet resultSet = statement.executeQuery();){
+                try (ResultSet resultSet = statement.executeQuery();) {
                     List<String[]> spanRowList = new ArrayList<>();
                     Set<RowSignature> cmpSigns = new HashSet<>();
-                    while(resultSet.next()){
-                        String[] spanRow = new String[3+PRIMARY_KEYS.size()];
-                        for(int i =1; i<=3+PRIMARY_KEYS.size();i++){
-                            spanRow[i-1] = resultSet.getString(i);
+                    while (resultSet.next()) {
+                        String[] spanRow = new String[3 + PRIMARY_KEYS.size()];
+                        for (int i = 1; i <= 3 + PRIMARY_KEYS.size(); i++) {
+                            spanRow[i - 1] = resultSet.getString(i);
                         }
                         spanRowList.add(spanRow);
                         RowSignature signature = new RowSignature(
@@ -692,24 +801,24 @@ public class dbCompareUtils {
                         );
                         cmpSigns.add(signature);
                     }
-                    fullSpanData1.add(new SpanData(spanRowList,cmpSigns));
+                    fullSpanData1.add(new SpanData(spanRowList, cmpSigns));
                 }
             }
         }
 
 
-        for(String str: changedRows){
-            try(PreparedStatement statement = db2Conn.prepareStatement(String.format(DIFF_COMPARE,db2Conn.getCatalog(),qTblName2,str));){
+        for (String str : changedRows) {
+            try (PreparedStatement statement = db2Conn.prepareStatement(String.format(DIFF_COMPARE, db2Conn.getCatalog(), qTblName2, str));) {
                 statement.setFetchSize(100);
                 statement.setFetchDirection(ResultSet.FETCH_FORWARD);
-                try(ResultSet resultSet = statement.executeQuery();){
+                try (ResultSet resultSet = statement.executeQuery();) {
                     List<String[]> spanRowList = new ArrayList<>();
                     Set<RowSignature> cmpSigns = new HashSet<>();
-                    while(resultSet.next()){
-                        String[] spanRow = new String[3+PRIMARY_KEYS.size()];
+                    while (resultSet.next()) {
+                        String[] spanRow = new String[3 + PRIMARY_KEYS.size()];
 
-                        for(int i =1; i<=3+PRIMARY_KEYS.size();i++){
-                            spanRow[i-1] = resultSet.getString(i);
+                        for (int i = 1; i <= 3 + PRIMARY_KEYS.size(); i++) {
+                            spanRow[i - 1] = resultSet.getString(i);
                         }
                         spanRowList.add(spanRow);
                         RowSignature signature = new RowSignature(
@@ -718,16 +827,16 @@ public class dbCompareUtils {
                         );
                         cmpSigns.add(signature);
                     }
-                    fullSpanData2.add(new SpanData(spanRowList,cmpSigns));
+                    fullSpanData2.add(new SpanData(spanRowList, cmpSigns));
                 }
             }
         }
 
 
-        List<Map<String,Object>> changedIn1 = new ArrayList<>();
-        List<Map<String,Object>> changedIn2 = new ArrayList<>();
-        List<Map<String,Object>> extraIn1 = new ArrayList<>();
-        List<Map<String,Object>> extraIn2 = new ArrayList<>();
+        List<Map<String, Object>> changedIn1 = new ArrayList<>();
+        List<Map<String, Object>> changedIn2 = new ArrayList<>();
+        List<Map<String, Object>> extraIn1 = new ArrayList<>();
+        List<Map<String, Object>> extraIn2 = new ArrayList<>();
 
         for (int pos = 0; pos < fullSpanData1.size(); pos++) {
             SpanData spanData1 = fullSpanData1.get(pos);
@@ -742,8 +851,8 @@ public class dbCompareUtils {
             Set<String> diffPkHash2 = extractPkHashes(diffRowsSign2);
 
 
-            for(String[] res :spanData1.getRowData()){
-                if(diffRowsSign1.contains(new RowSignature(res[0],res[1]))){
+            for (String[] res : spanData1.getRowData()) {
+                if (diffRowsSign1.contains(new RowSignature(res[0], res[1]))) {
                     String[] pks = Arrays.copyOfRange(res, 3, res.length);
 
                     StringBuilder whereClause = new StringBuilder();
@@ -763,8 +872,8 @@ public class dbCompareUtils {
                             obj1,
                             whereClauseStr);
 
-                    try(PreparedStatement Statement = db1Conn.prepareStatement(query);
-                        ResultSet needChangeRes = Statement.executeQuery()){
+                    try (PreparedStatement Statement = db1Conn.prepareStatement(query);
+                         ResultSet needChangeRes = Statement.executeQuery()) {
                         // 处理查询结果并分类
                         if (needChangeRes.next()) {
                             Map<String, Object> rowData = convertResultSetToMap(needChangeRes);
@@ -781,9 +890,9 @@ public class dbCompareUtils {
                 }
             }
 
-            for(String[] res :spanData2.getRowData()){
-                if(diffRowsSign2.contains(new RowSignature(res[0],res[1]))){
-                    String[] pks = Arrays.copyOfRange(res, 3, res.length );
+            for (String[] res : spanData2.getRowData()) {
+                if (diffRowsSign2.contains(new RowSignature(res[0], res[1]))) {
+                    String[] pks = Arrays.copyOfRange(res, 3, res.length);
 
                     StringBuilder whereClause = new StringBuilder();
                     for (int i = 0; i < PRIMARY_KEYS.size(); i++) {
@@ -802,8 +911,8 @@ public class dbCompareUtils {
                             obj2,
                             whereClauseStr);
 
-                    try(PreparedStatement Statement = db1Conn.prepareStatement(query);
-                        ResultSet needChangeRes = Statement.executeQuery();){
+                    try (PreparedStatement Statement = db1Conn.prepareStatement(query);
+                         ResultSet needChangeRes = Statement.executeQuery();) {
                         // 处理查询结果并分类
                         if (needChangeRes.next()) {
                             Map<String, Object> rowData = convertResultSetToMap(needChangeRes);
@@ -822,18 +931,18 @@ public class dbCompareUtils {
 
         }
 
-        return new ImmutablePair<>(new ImmutablePair<>(changedIn1,extraIn1),new ImmutablePair<>(changedIn2,extraIn2));
+        return new ImmutablePair<>(new ImmutablePair<>(changedIn1, extraIn1), new ImmutablePair<>(changedIn2, extraIn2));
     }
 
     /**
      * 根据变更数据生成SQL修复语句
      * @param changedIn1 需要更新的变更行（表1到表2）
-     * @param extraIn1 需要删除的额外行（表1独有）
-     * @param extraIn2 需要插入的额外行（表2独有）
-     * @param table2 容灾表名
+     * @param extraIn1   需要删除的额外行（表1独有）
+     * @param extraIn2   需要插入的额外行（表2独有）
+     * @param table2     容灾表名
      * @return SQL修复语句列表
      */
-    private static List<String> generateFixSqlStatements(List<Map<String, Object>> changedIn1,
+    private static List<String> generateFixSql(List<Map<String, Object>> changedIn1,
                                                          List<Map<String, Object>> extraIn1,
                                                          List<Map<String, Object>> extraIn2,
                                                          String table2) {
@@ -967,12 +1076,12 @@ public class dbCompareUtils {
 
         try {
             String cateLog = conn.getCatalog();
-            String compareTable = "compare_"+tableName;
+            String compareTable = "compare_" + tableName;
             // 收集所有主键值
             for (String span : extraSpans) {
                 String diffQuery = String.format(DIFF_COMPARE, cateLog, compareTable, span);
-                try(PreparedStatement statement = conn.prepareStatement(diffQuery);
-                    ResultSet spanResultSet = statement.executeQuery();) {
+                try (PreparedStatement statement = conn.prepareStatement(diffQuery);
+                     ResultSet spanResultSet = statement.executeQuery();) {
                     while (spanResultSet.next()) {
                         String[] pkValues = new String[PRIMARY_KEYS.size()];
                         for (int i = 0; i < PRIMARY_KEYS.size(); i++) {
@@ -1001,8 +1110,8 @@ public class dbCompareUtils {
                         tableName,
                         whereClause.toString());
 
-                try(PreparedStatement statement = conn.prepareStatement(originalQuery);
-                    ResultSet originalResultSet = statement.executeQuery();){
+                try (PreparedStatement statement = conn.prepareStatement(originalQuery);
+                     ResultSet originalResultSet = statement.executeQuery();) {
                     if (originalResultSet.next()) {
                         Map<String, Object> rowData = convertResultSetToMap(originalResultSet);
                         resultList.add(rowData);
@@ -1047,24 +1156,25 @@ public class dbCompareUtils {
 
     private static List<String[]> makeSumRows(Connection conn, String dbName, String compareTblName, String tableName) throws SQLException {
 
+        String pkStr = String.join(",", PRIMARY_KEYS);
 
-        String pkDef = buildIndexDefinition();
-
-        String tempSql = String.format(COMPARE_TABLE,
-                dbName,
-                compareTblName,
-                DEFAULT_SPAN_KEY_SIZE/2,
-                pkDef);
-
-        try(PreparedStatement statement = conn.prepareStatement(tempSql);){
-            statement.executeQuery();
+        COMPARE_COLUMNS.clear();
+        // 拿列名
+        String sql1 = "select * from %s limit 1".formatted(tableName);
+        try(PreparedStatement statement = conn.prepareStatement(sql1);
+                ResultSet resultSet = statement.executeQuery(sql1);){
+            //拿列名
+            ResultSetMetaData metaData = resultSet.getMetaData();
+            //获取列集
+            int columnCount = metaData.getColumnCount(); //获取列的数量
+            for(int i = 1; i <= columnCount; i++){
+                COMPARE_COLUMNS.add(i-1,metaData.getColumnName(i));
+            }
         }
 
-        String pkStr = String.join(",",PRIMARY_KEYS);
+        String colStr = String.join(",", COMPARE_COLUMNS);
 
-        String colStr = String.join(",",COMPARE_COLUMNS);
-
-        tempSql = String.format(INSERT_TABLE,
+        String tempSql = String.format(INSERT_TABLE,
                 dbName,
                 compareTblName,
                 pkStr,
@@ -1076,8 +1186,8 @@ public class dbCompareUtils {
                 dbName,
                 tableName);
 
-        try(PreparedStatement statement = conn.prepareStatement(tempSql);){
-            statement.executeQuery();
+        try (PreparedStatement statement = conn.prepareStatement(tempSql);) {
+            statement.execute();
         }
 
         tempSql = String.format(SUM_TABLE, dbName, compareTblName);
@@ -1104,65 +1214,68 @@ public class dbCompareUtils {
 
     // 这里不还原，python的table对象可以反找server对象，我这里需要传连接对象
     private static void setupCompare(Connection conn1, Connection conn2, String table1, String table2, int spanKeySize, List<String> useIndexes) throws SQLException {
-
-        List<String> diagMsgs =  new ArrayList<>();
+        PRIMARY_KEYS.clear();
+        List<String> diagMsgs = new ArrayList<>();
         DatabaseMetaData dbMetaData1 = conn1.getMetaData();
         DatabaseMetaData dbMetaData2 = conn2.getMetaData();
         // 拿两张表的主键
-        try(ResultSet set1 = dbMetaData1.getPrimaryKeys(conn1.getCatalog(), conn1.getSchema(),table1);
-            ResultSet set2 = dbMetaData2.getPrimaryKeys(conn2.getCatalog(), conn2.getSchema(),table2)){
-            while (set1.next()){
+        try (ResultSet set1 = dbMetaData1.getPrimaryKeys(conn1.getCatalog(), conn1.getSchema(), table1);
+             ResultSet set2 = dbMetaData2.getPrimaryKeys(conn2.getCatalog(), conn2.getSchema(), table2)) {
+            while (set1.next()) {
                 String pk1 = set1.getString("COLUMN_NAME");
 
                 PRIMARY_KEYS.add(pk1);
                 // 两张表主键不相同
-                if(set2.next()){
-                    if(!set1.getString("COLUMN_NAME").equals(pk1)){
-                        throw new RuntimeException(String.format("The specified index %s was not found in table %s",table1,table2));
+                if (set2.next()) {
+                    if (!set1.getString("COLUMN_NAME").equals(pk1)) {
+                        throw new RuntimeException(String.format("The specified index %s was not found in table %s", table1, table2));
                     }
-                }
-                else {
-                    throw new RuntimeException(String.format("The specified index %s was not found in table %s",table1,table2));
+                } else {
+                    throw new RuntimeException(String.format("The specified index %s was not found in table %s", table1, table2));
                 }
             }
         } catch (SQLException e) {
-            throw new RuntimeException("Indexes are not the same");
+            throw new RuntimeException("Indexes are not the same" + e);
         }
 
         // 丢弃旧的临时表
-        dropCompareObject(conn1,table1);
-        dropCompareObject(conn2,table2);
+        dropCompareObject(conn1, table1);
+        dropCompareObject(conn2, table2);
 
         // 获取创表语句
         String tbl1Table = String.format(COMPARE_TABLE,
                 conn1.getCatalog(),
-                String.format(COMPARE_TABLE_NAME,table1),
+                String.format(COMPARE_TABLE_NAME, table1),
                 spanKeySize / 2,
                 buildIndexDefinition());
 
         String tbl2Table = String.format(COMPARE_TABLE,
                 conn2.getCatalog(),
-                String.format(COMPARE_TABLE_NAME,table2),
+                String.format(COMPARE_TABLE_NAME, table2),
                 spanKeySize / 2,
                 buildIndexDefinition());
 
 
         boolean mustToggle1 = !conn1.getAutoCommit();
-        if(mustToggle1) {conn1.setAutoCommit(true);}
+        if (mustToggle1) {
+            conn1.setAutoCommit(true);
+        }
         boolean mustToggle2 = !conn2.getAutoCommit();
-        if(mustToggle2) {conn2.setAutoCommit(true);}
+        if (mustToggle2) {
+            conn2.setAutoCommit(true);
+        }
 
 
         // 创建临时表
-        try(PreparedStatement statement1 = conn1.prepareStatement(tbl1Table);
-            PreparedStatement statement2 = conn2.prepareStatement(tbl2Table);
-        ){
-            statement1.executeQuery();
-            statement2.executeQuery();
+        try (PreparedStatement statement1 = conn1.prepareStatement(tbl1Table);
+             PreparedStatement statement2 = conn2.prepareStatement(tbl2Table);
+        ) {
+            statement1.execute();
+            statement2.execute();
         }
 
-        if(mustToggle1) conn1.setAutoCommit(false);
-        if(mustToggle2) conn2.setAutoCommit(false);
+        if (mustToggle1) conn1.setAutoCommit(false);
+        if (mustToggle2) conn2.setAutoCommit(false);
 
     }
 
@@ -1183,18 +1296,18 @@ public class dbCompareUtils {
     }
 
     private static void dropCompareObject(Connection conn, String table) {
-        try{
+        try {
             boolean toggleServer = !conn.getAutoCommit();
-            if(toggleServer){
+            if (toggleServer) {
                 conn.setAutoCommit(true);
             }
-            String tTable = String.format(COMPARE_TABLE_NAME,table);
+            String tTable = String.format(COMPARE_TABLE_NAME, table);
 
-            try(PreparedStatement statement = conn.prepareStatement(String.format(COMPARE_TABLE_DROP,conn.getCatalog(),tTable))){
+            try (PreparedStatement statement = conn.prepareStatement(String.format(COMPARE_TABLE_DROP, conn.getCatalog(), tTable))) {
                 statement.executeQuery();
             }
 
-            if(toggleServer){
+            if (toggleServer) {
                 conn.setAutoCommit(false);
             }
 
@@ -1204,18 +1317,18 @@ public class dbCompareUtils {
     }
 
 
-    private static Long CheckSum(Connection conn, String table){
+    private static Long CheckSum(Connection conn, String table) {
         String checkSql = "checksum table %s".formatted(table);
         long checksum = 0;
 
-        try(Statement statement = conn.createStatement();
-            ResultSet rs = statement.executeQuery(checkSql);){
+        try (Statement statement = conn.createStatement();
+             ResultSet rs = statement.executeQuery(checkSql);) {
 
             while (rs.next()) {
                 checksum = rs.getLong("Checksum");
             }
             return checksum;
-        }catch (SQLException e){
+        } catch (SQLException e) {
             return 0L;
         }
 
@@ -1243,7 +1356,7 @@ public class dbCompareUtils {
 
     @Getter
     @Setter
-    public static class DiffServer{
+    public static class DiffServer {
         private List<String> first;
         private List<String> second;
     }

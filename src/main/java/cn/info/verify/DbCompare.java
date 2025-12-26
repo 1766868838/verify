@@ -3,7 +3,6 @@ package cn.info.verify;
 import cn.info.verify.compare.CheckResult;
 import lombok.Getter;
 import lombok.Setter;
-import org.springframework.http.server.PathContainer;
 import org.springframework.stereotype.Component;
 
 import java.sql.*;
@@ -13,7 +12,7 @@ import java.util.*;
  * 数据库校验入口类
  */
 @Component
-public class dbCompare {
+public class DbCompare {
 
     public final static int DEFAULT_SPAN_KEY_SIZE = 8;
 
@@ -22,9 +21,9 @@ public class dbCompare {
     private final static String ERROR_ORW_COUNT = "Row counts are not the same among %s and %s.\n#";
     private final static Map<String, Object> DEFAULT_OPTIONS = new HashMap<>() {{
         put("quiet", false);
-        put("verbosity", 0);
+        put("verbosity", 3);
         put("difftype", "differ");
-        put("run_all_tests", false);
+        put("run_all_tests", true);
         put("width", 75);
         put("no_object_check", false);
         put("no_diff", false);
@@ -33,34 +32,41 @@ public class dbCompare {
         put("transform", false);
         put("span_key_size", DEFAULT_SPAN_KEY_SIZE);
     }};
+    private final static String ROW_FORMAT1 = "# %s %s %s %s %s";
+    private final static int PRINT_WIDTH = 75;
+    /**
+     * @param server1Val 服务器1连接信息s
+     * @param server2Val 服务器2连接信息
+     * @param db1        数据库1
+     * @param db2        数据库2
+     * @param options    配置选项
+     * @return 对比结果 - true表示全部匹配，false表示有差异
+     */
+    public boolean databaseCompare(String server1Val, String server2Val, String db1, String db2, Map<String, Object> options) throws SQLException {
 
-
-
-
-    public boolean databaseCompare(String server1Val, String server2Val, String db1, String db2, Map<String,Object> options) throws SQLException {
-
+        if (Objects.isNull(options)) options = new HashMap<>();
         checkOptionDefault(options);
-        boolean quiet = (boolean) options.getOrDefault("quiet","False");
+        boolean quiet = (boolean) options.getOrDefault("quiet", "False");
 
         // 提前声明函数结果success
         boolean success = false;
 
         // 得到两个数据库
-        dbCompareUtils.serverConnect(server1Val,server2Val,db1,db2,options);
+        DbCompareUtils.serverConnect(server1Val, server2Val, db1, db2, options);
 
         // 直接从conn开始吧
-        try(Connection db1Conn = DriverManager.getConnection("jdbc:mysql://localhost:3306/test3","root","infocore");
-            Connection db2Conn = DriverManager.getConnection("jdbc:mysql://localhost:3306/test4","root","infocore")){
+        try (Connection db1Conn = DriverManager.getConnection("jdbc:mysql://localhost:3306/test3", "root", "infocore");
+             Connection db2Conn = DriverManager.getConnection("jdbc:mysql://localhost:3306/test4", "root", "infocore")) {
 
-            if(db1Conn.isValid(10)) throw new SQLException(String.format(ERROR_DB_MISSING, db1));
-            if(db1Conn.isValid(10)) throw new SQLException(String.format(ERROR_DB_MISSING, db2));
+            // 以秒为单位
+            if (!db1Conn.isValid(10)) throw new SQLException(String.format(ERROR_DB_MISSING, db1));
+            if (!db1Conn.isValid(10)) throw new SQLException(String.format(ERROR_DB_MISSING, db2));
 
-            if(!quiet){
+            if (!quiet) {
                 String message;
-                if(server2Val.isEmpty()){
+                if (server2Val.isEmpty()) {
                     message = "# Checking databases %s and %s on server1\n#";
-                }
-                else{
+                } else {
                     message = ("# Checking databases %s on server1 and %s on server2\n#");
                 }
 
@@ -77,59 +83,50 @@ public class dbCompare {
             success = !checkResult.isDiffers();
 
             // reporter 用于打印输出，暂时忽略sqlMode
-
             Reporter reporter = new Reporter(options);
+            reporter.printHeading();
 
-
-            // 这里的inBoth格式：   table_type:table_name
+            // inBoth格式：   table_type:table_name
             List<String> inBoth = checkResult.getInBoth();
 
-            for(String item : inBoth){
+            for (String item : inBoth) {
                 List<String> errorList = new ArrayList<>();
                 List<String> debugMsgs = new ArrayList<>();
 
                 String objType = item.split(":")[0];
 
-                String qObj1 = String.format("%s.%s",db1,item.split(":")[1]);
-                String qObj2 = String.format("%s.%s",db2,item.split(":")[1]);
+                String qObj1 = String.format("%s.%s", db1, item.split(":")[1]);
+                String qObj2 = String.format("%s.%s", db2, item.split(":")[1]);
 
-                List<String> errors = compareObject(db1Conn, db2Conn, qObj1, qObj2, reporter ,options, objType);
+                List<String> errors = compareObject(db1Conn, db2Conn, qObj1, qObj2, reporter, options, objType);
 
                 errorList.addAll(errors);
 
-                if(objType.equals("table")){
+                if (objType.equals("TABLE")) {
                     errors = checkRowCounts(db1Conn, db2Conn, qObj1, qObj2, reporter, options);
-                    if(!errors.isEmpty()){
+                    if (!errors.isEmpty()) {
                         errorList.addAll(errors);
                     }
-                }
-                else{
-                    reporter.setReportState("-");
+                } else {
+                    reporter.reportState("-");
                 }
 
-                if(objType.equals("table")){
+                if (objType.equals("TABLE")) {
                     // 这里应该是由两个返回值的，但是貌似第二个返回值一直为空，且后续没有使用
                     errors = checkDataConsistency(db1Conn, db2Conn, qObj1, qObj2, reporter, options);
-                    if(!errors.isEmpty()){
+                    if (!errors.isEmpty()) {
                         errorList.addAll(errors);
                     }
-                }
-                else  reporter.reportState("-");
+                } else reporter.reportState("-");
                 // selectedCode部分的逻辑
                 if ((int) options.get("verbosity") > 0) {
                     if (!quiet) {
                         System.out.println();
                     }
                     try {
-                        String createObj1 = dbCompareUtils.getCreateObject(db1Conn, qObj1, options, objType);
-                        String createObj2 = dbCompareUtils.getCreateObject(db2Conn, qObj2, options, objType);
+                        String createObj1 = DbCompareUtils.getCreateObject(db1Conn, qObj1, options, objType);
+                        String createObj2 = DbCompareUtils.getCreateObject(db2Conn, qObj2, options, objType);
 
-                        if ((int) options.get("verbosity") > 0 && !quiet) {
-                            System.out.println("# Object 1 definition:");
-                            System.out.println(createObj1);
-                            System.out.println("# Object 2 definition:");
-                            System.out.println(createObj2);
-                        }
                     } catch (SQLException e) {
                         System.err.println("Error getting object definition: " + e.getMessage());
                     }
@@ -159,7 +156,6 @@ public class dbCompare {
      * @param excludeList 要排除的数据库列表
      * @param options 配置选项
      * @return 对比结果 - true表示全部匹配，false表示有差异，null表示没有可比较的数据库
-     * @throws SQLException SQL执行异常
      */
     public boolean compareAllDatabases(String server1Val, String server2Val, List<String> excludeList, Map<String, Object> options) throws SQLException {
         boolean success = true;
@@ -167,11 +163,11 @@ public class dbCompare {
 
         // 这里的server1Val只是装饰的，实际应该用的Connection
 
-        try(Connection conn1 = DriverManager.getConnection("jdbc:mysql://localhost:3306","root","infocore");
-            Connection conn2 = DriverManager.getConnection("jdbc:mysql://localhost:3307","root","infocore")) {
+        try (Connection conn1 = DriverManager.getConnection("jdbc:mysql://localhost:3306", "root", "infocore");
+             Connection conn2 = DriverManager.getConnection("jdbc:mysql://localhost:3307", "root", "infocore")) {
 
             // 检查指定的服务器是否相同，这里简化处理
-            if(conn1.equals(conn2)) {
+            if (conn1.equals(conn2)) {
                 throw new SQLException(
                         "Specified servers are the same (server1=localhost:3306 and " +
                                 "server2=localhost:3307). Cannot compare all databases on the same server."
@@ -192,29 +188,29 @@ public class dbCompare {
 
             // 构建查询语句
             String getDbsQuery = """
-                SELECT SCHEMA_NAME
-                FROM INFORMATION_SCHEMA.SCHEMATA
-                WHERE SCHEMA_NAME != 'INFORMATION_SCHEMA'
-                AND SCHEMA_NAME != 'PERFORMANCE_SCHEMA'
-                AND SCHEMA_NAME != 'mysql'
-                AND SCHEMA_NAME != 'sys'
-                %s
-            """.formatted(conditions.toString());
+                        SELECT SCHEMA_NAME
+                        FROM INFORMATION_SCHEMA.SCHEMATA
+                        WHERE SCHEMA_NAME != 'INFORMATION_SCHEMA'
+                        AND SCHEMA_NAME != 'PERFORMANCE_SCHEMA'
+                        AND SCHEMA_NAME != 'mysql'
+                        AND SCHEMA_NAME != 'sys'
+                        %s
+                    """.formatted(conditions.toString());
 
             // 获取服务器1上的数据库
             Set<String> server1Dbs = new HashSet<>();
-            try(PreparedStatement stmt1 = conn1.prepareStatement(getDbsQuery);
-                ResultSet rs1 = stmt1.executeQuery()) {
-                while(rs1.next()) {
+            try (PreparedStatement stmt1 = conn1.prepareStatement(getDbsQuery);
+                 ResultSet rs1 = stmt1.executeQuery()) {
+                while (rs1.next()) {
                     server1Dbs.add(rs1.getString(1));
                 }
             }
 
             // 获取服务器2上的数据库
             Set<String> server2Dbs = new HashSet<>();
-            try(PreparedStatement stmt2 = conn2.prepareStatement(getDbsQuery);
-                ResultSet rs2 = stmt2.executeQuery()) {
-                while(rs2.next()) {
+            try (PreparedStatement stmt2 = conn2.prepareStatement(getDbsQuery);
+                 ResultSet rs2 = stmt2.executeQuery()) {
+                while (rs2.next()) {
                     server2Dbs.add(rs2.getString(1));
                 }
             }
@@ -279,10 +275,10 @@ public class dbCompare {
         boolean quiet = (boolean) options.getOrDefault("quiet", false);
 
         List<String> errors = new ArrayList<>();
-        if(!(boolean) options.get("no_data")) {
-            reporter.setReportState("-");
-            try{
-                dbCompareUtils.DiffServer diffServer = dbCompareUtils.checkConsistency(db1Conn, db2Conn, obj1, obj2, options, reporter);
+        if (!(boolean) options.get("no_data")) {
+            reporter.reportState("-");
+            try {
+                DbCompareUtils.DiffServer diffServer = DbCompareUtils.checkConsistency(db1Conn, db2Conn, obj1, obj2, options, reporter);
                 // if no differences, return
                 if ((diffServer == null) ||
                         (!reverse && "server1".equals(direction) && diffServer.getFirst() == null) ||
@@ -306,15 +302,15 @@ public class dbCompare {
             } catch (SQLException e) {
                 // 处理异常情况
                 if (e.getMessage().endsWith("not have an usable Index or primary key.")) {
-                    reporter.setReportState("SKIP");
+                    reporter.reportState("SKIP");
                     errors.add("# " + e.getMessage());
                 } else {
-                    reporter.setReportState("FAIL");
+                    reporter.reportState("FAIL");
                     errors.add(e.getMessage());
                 }
             }
         } else {
-            reporter.setReportState("SKIP");
+            reporter.reportState("SKIP");
         }
 
         return errors;
@@ -323,35 +319,31 @@ public class dbCompare {
     private List<String> checkRowCounts(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Reporter reporter, Map<String, Object> options) throws SQLException {
 
         List<String> errors = new ArrayList<>();
-        if(!(boolean)options.get("no_row_count")) {
-            try(PreparedStatement statement1 = db1Conn.prepareStatement("SELECT COUNT(*) FROM " + obj1);
-                PreparedStatement statement2 = db2Conn.prepareStatement("SELECT COUNT(*) FROM " + obj2);
-                ResultSet resultSet1 = statement1.executeQuery();
-                ResultSet resultSet2 = statement2.executeQuery();
+        if (!(boolean) options.get("no_row_count")) {
+            try (PreparedStatement statement1 = db1Conn.prepareStatement("SELECT COUNT(*) FROM " + obj1);
+                 PreparedStatement statement2 = db2Conn.prepareStatement("SELECT COUNT(*) FROM " + obj2);
+                 ResultSet resultSet1 = statement1.executeQuery();
+                 ResultSet resultSet2 = statement2.executeQuery();
             ) {
-                String rs1 = null,rs2 = null;
+                String rs1 = null, rs2 = null;
                 // count结果应该在第二列
-                if(resultSet1.next()) rs1 = resultSet1.getString(2);
-                if(resultSet2.next()) rs2 = resultSet2.getString(2);
-                if(rs1!=null && rs2!= null && !rs1.equals(rs2)){
-                    reporter.setReportState("FAIL");
+                if (resultSet1.next()) rs1 = resultSet1.getString(1);
+                if (resultSet2.next()) rs2 = resultSet2.getString(1);
+                if (rs1 != null && rs2 != null && !rs1.equals(rs2)) {
+                    reporter.reportState("FAIL");
                     String msg = String.format(ERROR_ORW_COUNT, obj1, obj2);
-                    if(!(boolean) options.get("run_all_tests") && !(boolean) options.getOrDefault("quiet",false)){
-                        throw new Error(msg);
+                    if (!(boolean) options.get("run_all_tests") && !(boolean) options.getOrDefault("quiet", false)) {
+                        //throw new Error(msg);
+                        System.err.println(msg);
+                    } else {
+                        errors.add(String.format("# %s", msg));
                     }
-                    else{
-                        errors.add(String.format("# %s",msg));
-                    }
-                }
-
-                else {
-                    reporter.setReportState("PASS");
+                } else {
+                    reporter.reportState("PASS");
                 }
             }
-        }
-
-        else{
-            reporter.setReportState("SKIP");
+        } else {
+            reporter.reportState("SKIP");
         }
         return errors;
     }
@@ -359,26 +351,24 @@ public class dbCompare {
     private List<String> compareObject(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Reporter reporter, Map<String, Object> options, String objType) throws SQLException {
 
         List<String> errors = new ArrayList<>();
-        if(!(boolean)options.get("no_diff")){
+        if (!(boolean) options.get("no_diff")) {
             Map<String, Object> newOpt = new HashMap<>(options);
-            newOpt.replace("quiet",true);
-            newOpt.replace("suppress_sql",true);
+            newOpt.replace("quiet", true);
+            newOpt.replace("suppress_sql", true);
 
-            List<String> res = dbCompareUtils.diffObjects(db1Conn, db2Conn, obj1, obj2, newOpt, objType);
+            List<String> res = DbCompareUtils.diffObjects(db1Conn, db2Conn, obj1, obj2, newOpt, objType);
 
-            if(!Objects.isNull(res)){
-                reporter.setReportState("FAIL");
+            if (!Objects.isNull(res)) {
+                reporter.reportState("FAIL");
                 errors.addAll(res);
-                if(!(boolean)options.get("run_all_tests") && !(boolean)options.getOrDefault("quiet",false)){
+                if (!(boolean) options.get("run_all_tests") && !(boolean) options.getOrDefault("quiet", false)) {
                     throw new Error("The object definitions do not match.");
                 }
+            } else {
+                reporter.reportState("PASS");
             }
-            else{
-                reporter.setReportState("PASS");
-            }
-        }
-        else{
-            reporter.setReportState("SKIP");
+        } else {
+            reporter.reportState("SKIP");
         }
 
         return errors;
@@ -387,47 +377,73 @@ public class dbCompare {
 
     @Getter
     @Setter
-    public class Reporter{
+    public class Reporter {
 
-        String reportState;
-        String reportObject;
-        boolean quiet;
-        int opeWidth = 10;
-        int typeWidth = 15;  // 对象类型列宽度
-        int descWidth = 50;  // 描述列宽度
+        private int width;
+        private String reportState;
+        private String reportObject;
+        private boolean quiet = false;
+        private int opeWidth = 10;
+        private int typeWidth = 15;  // 对象类型列宽度
+        private int descWidth = 50;  // 描述列宽度
 
-        Reporter(){
-
-        }
-        Reporter(Map<String,Object> Options){
-
-        }
-
-        void reportObject(String objType, String description){
-            if(quiet){
-                return;
-            }
-            System.out.printf("\n# %-" + typeWidth + "s %-" + descWidth + "s", objType, description);
+        Reporter(Map<String, Object> options) {
+            this.width = (int) options.getOrDefault("width", PRINT_WIDTH) -2;
+            this.quiet = (boolean) options.getOrDefault("quiet", false);
         }
 
         /**
          * 左对齐打印输出
          */
-        void reportState(String state){
-            if(quiet){
+        public void reportState(String state) {
+            if (quiet) {
                 return;
             }
-            System.out.printf("%-"+ opeWidth + " %s", state);
+            System.out.printf("%-" + opeWidth + "s", state);
         }
 
-        public void reportErrors(List<String> debugMsgs) {
+        public void reportObject(String objType, String description) {
+            if (quiet) {
+                return;
+            }
+            System.out.printf("\n# %-" + typeWidth + "s %-" + descWidth + "s", objType, description);
+        }
+
+        public void reportErrors(List<String> errors) {
+            if (errors != null && !errors.isEmpty()) {
+                System.out.println("\n#");
+                for (String line : errors) {
+                    System.out.println(line);
+                }
+            }
+        }
+
+        public void printHeading() {
+            if (quiet) {
+                return;
+            }
+            System.out.printf(ROW_FORMAT1 + "%n",
+                    String.format("%-" + typeWidth + "s", ""),
+                    String.format("%-" + descWidth + "s", ""),
+                    String.format("%-" + opeWidth + "s", "Defn"),
+                    String.format("%-" + opeWidth + "s", "Row"),
+                    String.format("%-" + opeWidth + "s", "Data"));
+            System.out.printf(ROW_FORMAT1 + "%n",
+                    String.format("%-" + typeWidth + "s", "Type"),
+                    String.format("%-" + descWidth + "s", "Object Name"),
+                    String.format("%-" + opeWidth + "s", "Diff"),
+                    String.format("%-" + opeWidth + "s", "Count"),
+                    String.format("%-" + opeWidth + "s", "Check"));
+
+
+            System.out.printf("# %s\n",width);
         }
     }
 
-    private CheckResult checkObjects(Connection db1Conn, Connection db2Conn, String db1, String db2, Map<String,Object>options) throws SQLException {
+    private CheckResult checkObjects(Connection db1Conn, Connection db2Conn, String db1, String db2, Map<String, Object> options) throws SQLException {
 
         //get_common_objects
-        List<List<String>> temp = dbCompareUtils.getCommonObjects(db1Conn, db2Conn, false, options);
+        List<List<String>> temp = DbCompareUtils.getCommonObjects(db1Conn, db2Conn, false, options);
         List<String> inBoth = temp.get(0);
         List<String> inDb1 = temp.get(1);
         List<String> inDb2 = temp.get(2);
@@ -444,13 +460,12 @@ public class dbCompare {
             }
 
             // 检查是否有缺失的对象
-
             if (!inDb1.isEmpty() || !inDb2.isEmpty()) {
                 if ((boolean) options.get("run_all_tests")) {
                     if (!inDb1.isEmpty()) {
                         differs = true;
                         if (!(boolean) options.get("quiet")) {
-                            dbCompareUtils.printMissingList(inDb1, server1Str, server2Str);
+                            DbCompareUtils.printMissingList(inDb1, server1Str, server2Str);
                             System.out.println("#");
                         }
                     }
@@ -458,21 +473,21 @@ public class dbCompare {
                     if (!inDb2.isEmpty()) {
                         differs = true;
                         if (!(boolean) options.get("quiet")) {
-                            dbCompareUtils.printMissingList(inDb2, server2Str, server1Str);
+                            DbCompareUtils.printMissingList(inDb2, server2Str, server1Str);
                             System.out.println("#");
                         }
                     }
                 } else {
                     differs = true;
                     if (!(boolean) options.get("quiet")) {
-                        throw new SQLException(String.format(ERROR_OBJECT_LIST, db1, db2));
+                        System.err.println(String.format(ERROR_OBJECT_LIST, db1, db2));
                     }
                 }
             }
 
         }
 
-        if((int)options.get("verbosity")>1){
+        if ((int) options.get("verbosity") > 1) {
             Map<String, Integer> objects = new HashMap<>();
             objects.put("TABLE", 0);
             objects.put("VIEW", 0);
@@ -484,7 +499,7 @@ public class dbCompare {
             // 统计共同对象的类型
             for (String item : inBoth) {
                 String[] parts = item.split(":");
-                String objType = parts.length > 1 ? parts[1] : "unknown";
+                String objType = parts.length >= 1 ? parts[0] : "unknown";
                 if (objects.containsKey(objType)) {
                     objects.put(objType, objects.get(objType) + 1);
                 }
@@ -498,11 +513,11 @@ public class dbCompare {
             }
         }
 
-        return new CheckResult(inBoth,differs);
+        return new CheckResult(inBoth, differs);
 
     }
 
-    private void checkOptionDefault(Map<String,Object> options) {
+    private void checkOptionDefault(Map<String, Object> options) {
         options.putAll(DEFAULT_OPTIONS);
     }
 
