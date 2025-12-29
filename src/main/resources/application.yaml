@@ -1,0 +1,20 @@
+spring:
+  datasource:
+    username: root
+    password: infocore
+    url: jdbc:mysql://localhost:3306/test3
+  jpa:
+    hibernate:
+      ddl-auto: update
+    generate-ddl: true
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    disable-swagger-default-url: true
+    display-request-duration: true
+  #packages-to-scan: cn.infocore.dbs.compare.controller
+server:
+  port: 8080

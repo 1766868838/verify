@@ -1,13 +1,20 @@
 package cn.info.verify;
 
+import cn.infocore.dbs.compare.VerifyApplication;
+import cn.infocore.dbs.compare.model.DbConnection;
+import cn.infocore.dbs.compare.model.dto.DbCompareDto;
+import cn.infocore.dbs.compare.service.impl.DbCompareServiceImpl;
+import cn.infocore.dbs.compare.verify.VerifyClient;
+import cn.infocore.dbs.compare.verify.VerifyClient1;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 
-@SpringBootTest
+@SpringBootTest(classes = VerifyApplication.class)
 class VerifyApplicationTests {
 
     @Test
@@ -51,10 +58,23 @@ class VerifyApplicationTests {
 
     }
 
+    @Autowired
+    DbCompareServiceImpl service;
+
     @Test
     void test() throws SQLException {
-        DbCompare dbCompare = new DbCompare();
-        System.out.println(dbCompare.databaseCompare("1","2","test3","test4",null));
+        DbCompareDto dbCompareDto = new DbCompareDto();
+        DbConnection dbConnection1 = new DbConnection();
+        dbConnection1.setDbType("MYSQL");
+        dbConnection1.setHost("localhost");
+        dbConnection1.setPort(3306);
+        dbConnection1.setUsername("root");
+        dbConnection1.setPassword("infocore");
+        dbCompareDto.setSourceDb(dbConnection1);
+        dbCompareDto.setTargetDb(dbConnection1);
+
+        service.start(dbCompareDto);
+
     }
 
 }
