@@ -1,6 +1,7 @@
 package cn.infocore.dbs.compare.service.impl;
 
 import cn.infocore.dbs.compare.model.DbResult;
+import cn.infocore.dbs.compare.model.ObjectDiff;
 import cn.infocore.dbs.compare.model.dto.DbResultDto;
 import cn.infocore.dbs.compare.verify.DbCompareEntry;
 import cn.infocore.dbs.compare.verify.VerifyClient;
@@ -61,10 +62,11 @@ public class DbCompareServiceImpl implements DbCompareService {
     public void start(DbCompareDto dbCompare) throws SQLException {
 
         // 先试试指定数据库比较
-        //DbResultDto
         DbResultDto resultDto = dbCompareEntry.databaseCompare(
                 dbCompare.getSourceDb(), dbCompare.getTargetDb(),
                 "test3", "test4", null,1);
+        resultDto.setSourceDb(dbCompare.getSourceDb().getHost());
+        resultDto.setTargetDb(dbCompare.getTargetDb().getHost());
 
     }
 

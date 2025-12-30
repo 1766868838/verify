@@ -1,6 +1,7 @@
 package cn.infocore.dbs.compare.model;
 
 import cn.infocore.dbs.compare.converter.DbObjectConverter;
+import cn.infocore.dbs.compare.model.dto.DbCompareDto;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -12,7 +13,7 @@ import java.util.Date;
 @Entity
 @Getter
 @Setter
-public class DbCompare implements Serializable {
+public class DbCompare extends DbCompareDto implements Serializable {
 
     public enum Type{
         FAST, STRICT

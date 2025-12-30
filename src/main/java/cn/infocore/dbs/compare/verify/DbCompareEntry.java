@@ -1,11 +1,15 @@
 package cn.infocore.dbs.compare.verify;
 
+import cn.infocore.dbs.compare.model.DbCompare;
 import cn.infocore.dbs.compare.model.DbConnection;
+import cn.infocore.dbs.compare.model.DbResult;
 import cn.infocore.dbs.compare.model.ObjectDiff;
 import cn.infocore.dbs.compare.model.dto.DbResultDto;
 import cn.infocore.dbs.compare.verify.compare.CheckResult;
 import lombok.Getter;
 import lombok.Setter;
+import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Component;
 
 import java.sql.*;
@@ -40,12 +44,13 @@ public class DbCompareEntry {
     private final static int PRINT_WIDTH = 75;
 
     /**
+     * 返回结果包括数据校验的详细差异，校验的修复语句
      * @param server1Val 服务器1连接信息s
      * @param server2Val 服务器2连接信息
      * @param db1        数据库1
      * @param db2        数据库2
      * @param options    配置选项
-     * @return 对比结果 - true表示全部匹配，false表示有差异
+     * @return ImmutablePair<List<ObjectDiff>, List<String>>
      */
     public DbResultDto databaseCompare(DbConnection server1Val, DbConnection server2Val, String db1, String db2, Map<String, Object> options, int test) throws SQLException {
 
@@ -57,6 +62,8 @@ public class DbCompareEntry {
 
         // 提前声明函数结果success
         boolean success = false;
+
+        ImmutablePair<List<ObjectDiff>, List<String>> resultList = null;
 
         // 得到两个数据库
         DbCompareUtils.serverConnect(server1Val.getHost(), server2Val.getHost(), db1, db2, options);
@@ -86,11 +93,15 @@ public class DbCompareEntry {
             }
 
             // 有问题的话到不了这一步
-            // 这里比较的是对象的差异，貌似没需求，直接忽略
+            // 这里比较的是数据库的差异，貌似没需求，直接忽略
             //List<ObjectDiff> objectDiffList = checkDatabases(db1Conn, db2Conn, db1, db2, options);
 
             //_check_objects
             CheckResult checkResult = checkObjects(db1Conn, db2Conn, db1, db2, options);
+
+            // 校验结果这一块已经可以拿到了（实际上是对象数量统计)
+            dbResultDto.setSourceObject(checkResult.getSourceObject());
+            dbResultDto.setTargetObject(checkResult.getTargetObject());
 
             // 这里是python中第一次出现success
             success = !checkResult.isDiffers();
@@ -99,12 +110,18 @@ public class DbCompareEntry {
             List<String> inDb2 = checkResult.getInDb2();
 
             List<ObjectDiff> objectDiffList = new ArrayList<>();
+
+            //  这里的diffList 包含表缺失内容
             for(String str: inDb1){
-                objectDiffList.add(new ObjectDiff(str,false,false,"缺失表"+str));
+                String type = str.split(":")[0];
+                objectDiffList.add(new ObjectDiff(ObjectDiff.ObjectType.valueOf(type),str,false,false,"缺失"+str));
             }
             for(String str: inDb2){
-                objectDiffList.add(new ObjectDiff(str,false,false,"多余表"+str));
+                String type = str.split(":")[0];
+                objectDiffList.add(new ObjectDiff(ObjectDiff.ObjectType.valueOf(type),str,false,false,"额外"+str));
             }
+
+            dbResultDto.addObjectDiff(objectDiffList);
 
             // reporter 用于打印输出，暂时忽略sqlMode
             Reporter reporter = new Reporter(options);
@@ -122,6 +139,7 @@ public class DbCompareEntry {
                 String qObj1 = String.format("%s.%s", db1, item.split(":")[1]);
                 String qObj2 = String.format("%s.%s", db2, item.split(":")[1]);
 
+                // todo 表字段判断
                 List<String> errors = compareObject(db1Conn, db2Conn, qObj1, qObj2, reporter, options, objType);
 
                 errorList.addAll(errors);
@@ -137,12 +155,15 @@ public class DbCompareEntry {
 
                 if (objType.equals("TABLE")) {
                     // 这里应该是由两个返回值的，但是貌似第二个返回值一直为空，且后续没有使用
-                    errors = checkDataConsistency(db1Conn, db2Conn, qObj1, qObj2, reporter, options);
+                    resultList = checkDataConsistency(db1Conn, db2Conn, qObj1, qObj2, reporter, options);
+                    errors = resultList.getRight();
                     if (!errors.isEmpty()) {
                         errorList.addAll(errors);
+                        dbResultDto.addRepairSql(errors);
+                        dbResultDto.addObjectDiff(resultList.getLeft());
                     }
                 } else reporter.reportState("-");
-                // selectedCode部分的逻辑
+                // 这里只是判断一下后面的对象是否正常，不做额外处理
                 if ((int) options.get("verbosity") > 0) {
                     if (!quiet) {
                         System.out.println();
@@ -169,10 +190,20 @@ public class DbCompareEntry {
 
             }
 
-            return null;
+            return dbResultDto;
         }
     }
 
+    /**
+     * 数据库比较
+     * @param db1Conn
+     * @param db2Conn
+     * @param db1
+     * @param db2
+     * @param options
+     * @return
+     * @throws SQLException
+     */
     private List<ObjectDiff> checkDatabases(Connection db1Conn, Connection db2Conn, String db1, String db2, Map<String, Object> options) throws SQLException {
         if(!(boolean) options.get("no_diff")){
             Map<String,Object> new_opt = new HashMap<>();
@@ -195,125 +226,6 @@ public class DbCompareEntry {
         return null;
     }
 
-
-    /**
-     * @param server1Val 服务器1连接信息s
-     * @param server2Val 服务器2连接信息
-     * @param db1        数据库1
-     * @param db2        数据库2
-     * @param options    配置选项
-     * @return 对比结果 - true表示全部匹配，false表示有差异
-     */
-    public boolean databaseCompare(DbConnection server1Val, DbConnection server2Val, String db1, String db2, Map<String, Object> options) throws SQLException {
-
-        if (Objects.isNull(options)) options = new HashMap<>();
-        checkOptionDefault(options);
-        boolean quiet = (boolean) options.getOrDefault("quiet", "False");
-
-        // 提前声明函数结果success
-        boolean success = false;
-
-        // 得到两个数据库
-        DbCompareUtils.serverConnect(server1Val.getHost(), server2Val.getHost(), db1, db2, options);
-
-        String dbUrl = "jdbc:%s://%s:%d";
-
-        String url1 = String.format(dbUrl,server1Val.getDbType(),server1Val.getHost(),server1Val.getPort());
-        String url2 = String.format(dbUrl,server2Val.getDbType(),server2Val.getHost(),server2Val.getPort());
-
-        // 直接从conn开始吧
-        try (Connection db1Conn = DriverManager.getConnection(url1, server1Val.getUsername(), server1Val.getPassword());
-             Connection db2Conn = DriverManager.getConnection(url2, server2Val.getUsername(), server1Val.getPassword())) {
-
-            // 以秒为单位
-            if (!db1Conn.isValid(10)) throw new SQLException(String.format(ERROR_DB_MISSING, db1));
-            if (!db1Conn.isValid(10)) throw new SQLException(String.format(ERROR_DB_MISSING, db2));
-
-            if (!quiet) {
-                String message;
-                if (Objects.isNull(server2Val)) {
-                    message = "# Checking databases %s and %s on server1\n#";
-                } else {
-                    message = ("# Checking databases %s on server1 and %s on server2\n#");
-                }
-
-                System.out.printf((message) + "%n", db1Conn.getCatalog(), db2Conn.getCatalog());
-            }
-
-            // 有问题的话到不了这一步，直接忽略了
-            //checkDatabases();
-
-            //_check_objects
-            CheckResult checkResult = checkObjects(db1Conn, db2Conn, db1, db2, options);
-
-            // 这里是python中第一次出现success
-            success = !checkResult.isDiffers();
-
-            // reporter 用于打印输出，暂时忽略sqlMode
-            Reporter reporter = new Reporter(options);
-            reporter.printHeading();
-
-            // inBoth格式：   table_type:table_name
-            List<String> inBoth = checkResult.getInBoth();
-
-            for (String item : inBoth) {
-                List<String> errorList = new ArrayList<>();
-                List<String> debugMsgs = new ArrayList<>();
-
-                String objType = item.split(":")[0];
-
-                String qObj1 = String.format("%s.%s", db1, item.split(":")[1]);
-                String qObj2 = String.format("%s.%s", db2, item.split(":")[1]);
-
-                List<String> errors = compareObject(db1Conn, db2Conn, qObj1, qObj2, reporter, options, objType);
-
-                errorList.addAll(errors);
-
-                if (objType.equals("TABLE")) {
-                    errors = checkRowCounts(db1Conn, db2Conn, qObj1, qObj2, reporter, options);
-                    if (!errors.isEmpty()) {
-                        errorList.addAll(errors);
-                    }
-                } else {
-                    reporter.reportState("-");
-                }
-
-                if (objType.equals("TABLE")) {
-                    // 这里应该是由两个返回值的，但是貌似第二个返回值一直为空，且后续没有使用
-                    errors = checkDataConsistency(db1Conn, db2Conn, qObj1, qObj2, reporter, options);
-                    if (!errors.isEmpty()) {
-                        errorList.addAll(errors);
-                    }
-                } else reporter.reportState("-");
-                // selectedCode部分的逻辑
-                if ((int) options.get("verbosity") > 0) {
-                    if (!quiet) {
-                        System.out.println();
-                    }
-                    try {
-                        String createObj1 = DbCompareUtils.getCreateObject(db1Conn, qObj1, options, objType);
-                        String createObj2 = DbCompareUtils.getCreateObject(db2Conn, qObj2, options, objType);
-
-                    } catch (SQLException e) {
-                        System.err.println("Error getting object definition: " + e.getMessage());
-                    }
-                }
-
-                if (debugMsgs != null && !debugMsgs.isEmpty() && (int) options.get("verbosity") > 2) {
-                    reporter.reportErrors(debugMsgs);
-                }
-
-                if (!quiet) {
-                    reporter.reportErrors(errorList);
-                }
-                if (!errorList.isEmpty()) {
-                    success = false;
-                }
-
-            }
-            return success;
-        }
-    }
 
     /**
      * 对比两个服务器上所有非系统数据库
@@ -417,8 +329,8 @@ public class DbCompareEntry {
 
             for (String db : commonDbs) {
                 try {
-                    boolean res = databaseCompare(server1Val, server2Val, db, db, options);
-                    if (!res) {
+                    DbResultDto res = databaseCompare(server1Val, server2Val, db, db, options,1);
+                    if (res == null) {
                         success = false;
                     }
                     if (!quiet) {
@@ -435,37 +347,26 @@ public class DbCompareEntry {
     }
 
 
-    private List<String> checkDataConsistency(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Reporter reporter, Map<String, Object> options) {
+    private ImmutablePair<List<ObjectDiff>, List<String>> checkDataConsistency(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Reporter reporter, Map<String, Object> options) {
 
         String direction = (String) options.getOrDefault("changes-for", "server1");
         boolean reverse = (boolean) options.getOrDefault("reverse", false);
         boolean quiet = (boolean) options.getOrDefault("quiet", false);
 
         List<String> errors = new ArrayList<>();
+        ImmutablePair<List<ObjectDiff>, List<String>> diffList = null;
         if (!(boolean) options.get("no_data")) {
             reporter.reportState("-");
             try {
-                DbCompareUtils.DiffServer diffServer = DbCompareUtils.checkConsistency(db1Conn, db2Conn, obj1, obj2, options, reporter);
-                // if no differences, return
-                if ((diffServer == null) ||
-                        (!reverse && "server1".equals(direction) && diffServer.getFirst() == null) ||
-                        (!reverse && "server2".equals(direction) && diffServer.getSecond() == null)) {
+                diffList = DbCompareUtils.checkConsistency(db1Conn, db2Conn, obj1, obj2, options, reporter);
+                List<String> diffServer = diffList.getRight();
+                if ((diffServer == null)) {
                     // 返回空的错误列表，表示没有差异
-                    return new ArrayList<>();
+                    return null;
                 }
 
-                // 如果存在差异，根据方向构建差异列表
-                if (direction.equals("server1") || reverse) {
-                    if (diffServer.getFirst() != null) {
-                        errors.addAll(diffServer.getFirst());
-                    }
-                }
+                errors.addAll(diffServer);
 
-                if (direction.equals("server2") || reverse) {
-                    if (diffServer.getSecond() != null) {
-                        errors.addAll(diffServer.getSecond());
-                    }
-                }
             } catch (SQLException e) {
                 // 处理异常情况
                 if (e.getMessage().endsWith("not have an usable Index or primary key.")) {
@@ -480,7 +381,7 @@ public class DbCompareEntry {
             reporter.reportState("SKIP");
         }
 
-        return errors;
+        return diffList;
     }
 
     private List<String> checkRowCounts(Connection db1Conn, Connection db2Conn, String obj1, String obj2, Reporter reporter, Map<String, Object> options) throws SQLException {
@@ -654,14 +555,15 @@ public class DbCompareEntry {
 
         }
 
+        Map<String, Integer> objects = new HashMap<>();
+        // 容灾库中的所有对象
+        Map<String, Integer> targetObjects = new HashMap<>();
         if ((int) options.get("verbosity") > 1) {
-            Map<String, Integer> objects = new HashMap<>();
             objects.put("TABLE", 0);
             objects.put("VIEW", 0);
             objects.put("TRIGGER", 0);
             objects.put("PROCEDURE", 0);
             objects.put("FUNCTION", 0);
-            objects.put("EVENT", 0);
 
             // 统计共同对象的类型
             for (String item : inBoth) {
@@ -669,6 +571,23 @@ public class DbCompareEntry {
                 String objType = parts.length >= 1 ? parts[0] : "unknown";
                 if (objects.containsKey(objType)) {
                     objects.put(objType, objects.get(objType) + 1);
+                }
+            }
+            targetObjects = new HashMap<>(objects);
+            // 生产库中的所有对象
+            for (String item : inDb1) {
+                String[] parts = item.split(":");
+                String objType = parts.length >= 1 ? parts[0] : "unknown";
+                if (objects.containsKey(objType)) {
+                    objects.put(objType, objects.get(objType) + 1);
+                }
+            }
+
+            for (String item : inDb2) {
+                String[] parts = item.split(":");
+                String objType = parts.length >= 1 ? parts[0] : "unknown";
+                if (targetObjects.containsKey(objType)) {
+                    targetObjects.put(objType, objects.get(objType) + 1);
                 }
             }
 
@@ -680,7 +599,7 @@ public class DbCompareEntry {
             }
         }
 
-        return new CheckResult(inBoth, inDb1, inDb2, differs);
+        return new CheckResult(inBoth, inDb1, inDb2, objects, targetObjects ,differs);
 
     }
 

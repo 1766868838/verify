@@ -11,11 +11,11 @@ import java.util.List;
 @Setter
 public class Definition {
     String[] basicDef;
-    List<List<String>> colDef;
+    List<DbCompareUtils.Column> colDef;
     List<List<String>> partDef;
     List<String> tableOptions;
 
-    public Definition(String[] basicDef, List<List<String>> colDef, List<List<String>> partDef) {
+    public Definition(String[] basicDef, List<DbCompareUtils.Column> colDef, List<List<String>> partDef) {
         this.basicDef = basicDef;
         this.colDef = colDef;
         this.partDef = partDef;
@@ -46,7 +46,7 @@ public class Definition {
             List<String> tableOptions = Arrays.asList("ENGINE=InnoDB", "AUTO_INCREMENT=1", "DEFAULT", "CHARSET=utf8mb3");
             this.tableOptions = tableOptions;
             this.basicDef = basicDef;
-            this.colDef = colDef;
+            //this.colDef = colDef;
             this.partDef = partDef;
         }
         if(num == 2){
@@ -70,7 +70,7 @@ public class Definition {
             List<String> tableOptions = Arrays.asList("ENGINE=InnoDB", "AUTO_INCREMENT=1", "DEFAULT", "CHARSET=utf8mb4");
             this.tableOptions = tableOptions;
             this.basicDef = basicDef;
-            this.colDef = colDef;
+            //this.colDef = colDef;
             this.partDef = partDef;
         }
 
