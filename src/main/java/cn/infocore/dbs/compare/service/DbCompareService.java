@@ -12,13 +12,12 @@ public interface DbCompareService {
 
     void delete(Long id);
 
-    void update(DbCompareDto dbCompare);
+    void update(DbCompare dbCompare);
+    void update(DbCompareDto dbCompareDto);
 
     List<DbCompare> list();
 
-    void start(DbCompareDto dbCompare) throws SQLException;
+    void start(DbCompare dbCompare) throws SQLException;
 
-    void restart(DbCompareDto dbCompare) throws SQLException;
-
-    void stop();
+    void restart(DbCompare dbCompare) throws SQLException;
 }

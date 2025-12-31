@@ -1,5 +1,6 @@
 package cn.infocore.dbs.compare.service.impl;
 
+import cn.infocore.dbs.compare.model.DbConnection;
 import cn.infocore.dbs.compare.model.DbResult;
 import cn.infocore.dbs.compare.model.ObjectDiff;
 import cn.infocore.dbs.compare.model.dto.DbResultDto;
@@ -10,21 +11,28 @@ import cn.infocore.dbs.compare.dao.DbCompareDao;
 import cn.infocore.dbs.compare.model.DbCompare;
 import cn.infocore.dbs.compare.model.dto.DbCompareDto;
 import cn.infocore.dbs.compare.service.DbCompareService;
+import org.quartz.Job;
+import org.quartz.JobExecutionContext;
+import org.quartz.JobExecutionException;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Service;
 
 import java.sql.SQLException;
 import java.util.List;
 
 @Service
-public class DbCompareServiceImpl implements DbCompareService {
+public class DbCompareServiceImpl implements DbCompareService, Job {
 
     @Autowired
     private DbCompareEntry dbCompareEntry;
 
     @Autowired
     private DbCompareDao dao;
+
+    @Autowired
+    private DbResultServiceImpl dbResultService;
 
     @Override
     public void create(DbCompareDto dbCompare) {
@@ -44,31 +52,70 @@ public class DbCompareServiceImpl implements DbCompareService {
     }
 
     @Override
+    public void update(DbCompare dbCompare) {
+        dao.save(dbCompare);
+    }
+
+    @Override
     public List<DbCompare> list() {
         return dao.findAll();
     }
 
     @Override
-    public void restart(DbCompareDto dbCompare) throws SQLException {
+    public void restart(DbCompare dbCompare) throws SQLException {
         start(dbCompare);
     }
 
-    @Override
-    public void stop() {
-
-    }
 
     @Override
-    public void start(DbCompareDto dbCompare) throws SQLException {
+    public void start(DbCompare dbCompare) throws SQLException {
 
-        // 先试试指定数据库比较
-        DbResultDto resultDto = dbCompareEntry.databaseCompare(
-                dbCompare.getSourceDb(), dbCompare.getTargetDb(),
-                "test3", "test4", null,1);
-        resultDto.setSourceDb(dbCompare.getSourceDb().getHost());
-        resultDto.setTargetDb(dbCompare.getTargetDb().getHost());
+
 
     }
 
 
+    @Override
+    public void execute(JobExecutionContext context) {
+
+        System.out.println("开始执行任务");
+        DbCompare dbCompare = (DbCompare) context.getJobDetail().getJobDataMap().get("DbCompare");
+        try {
+            // 先试试指定数据库比较
+            if(dbCompare == null){
+                System.err.println("dbCompare 参数不能为 null");
+            }
+            if (dbCompare.getSourceHost() == null || dbCompare.getSourceHost() == null) {
+                System.err.println("源数据库或目标数据库配置不能为 null");
+            }
+            DbConnection sourceDb = new DbConnection();
+            sourceDb.setDbType(dbCompare.getSourceDbType());
+            sourceDb.setHost(dbCompare.getSourceHost());
+            sourceDb.setPort(dbCompare.getSourcePort());
+            sourceDb.setUsername(dbCompare.getSourceUsername());
+            sourceDb.setPassword(dbCompare.getSourcePassword());
+
+            DbConnection targetDb = new DbConnection();
+            targetDb.setDbType(dbCompare.getTargetDbType());
+            targetDb.setHost(dbCompare.getTargetHost());
+            targetDb.setPort(dbCompare.getTargetPort());
+            targetDb.setUsername(dbCompare.getTargetUsername());
+            targetDb.setPassword(dbCompare.getTargetPassword());
+
+            DbResultDto resultDto = dbCompareEntry.databaseCompare(sourceDb, targetDb,
+                    "test3", "test4", null,1);
+            resultDto.setSourceDb(sourceDb.getHost());
+            resultDto.setTargetDb(targetDb.getHost());
+
+            System.out.println(resultDto);
+
+            // 将结果存储到数据库中
+            DbResult result = new DbResult();
+            BeanUtils.copyProperties(resultDto,result);
+            dbResultService.insert(result);
+
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
 }

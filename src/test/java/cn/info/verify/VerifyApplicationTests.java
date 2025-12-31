@@ -1,8 +1,10 @@
 package cn.info.verify;
 
 import cn.infocore.dbs.compare.VerifyApplication;
+import cn.infocore.dbs.compare.model.DbCompare;
 import cn.infocore.dbs.compare.model.DbConnection;
 import cn.infocore.dbs.compare.model.dto.DbCompareDto;
+import cn.infocore.dbs.compare.quartz.QuartzService;
 import cn.infocore.dbs.compare.service.impl.DbCompareServiceImpl;
 import cn.infocore.dbs.compare.verify.VerifyClient;
 import cn.infocore.dbs.compare.verify.VerifyClient1;
@@ -12,6 +14,10 @@ import jakarta.persistence.Column;
 import lombok.Getter;
 import lombok.Setter;
 import org.junit.jupiter.api.Test;
+import org.quartz.JobExecutionContext;
+import org.quartz.Scheduler;
+import org.quartz.SchedulerException;
+import org.quartz.impl.JobExecutionContextImpl;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -24,33 +30,16 @@ import java.util.Map;
 @SpringBootTest(classes = VerifyApplication.class)
 class VerifyApplicationTests {
 
-    @Test
-    void contextLoads() {
-        try{
-            Connection conn1 = DriverManager.getConnection("jdbc:mysql://localhost:3306/test1","root","infocore");
-            Connection conn2 = DriverManager.getConnection("jdbc:mysql://localhost:3306/test2","root","infocore");
-//            Connection conn1 = DriverManager.getConnection("jdbc:mysql://localhost:13307/test1","root","123456");
-//            Connection conn2 = DriverManager.getConnection("jdbc:mysql://localhost:13308/test2","root","123456");
-
-            String table1= "user";
-            String table2= "user";
-
-            VerifyClient verifyClient = new VerifyClient();
-            System.out.println(verifyClient.Verify(conn1,conn2,table1,table2));
-
-            //System.out.println(verifyClient.CompareDb(conn1,conn2));
-
-            conn1.close();
-            conn2.close();
-        } catch (SQLException e) {
-            throw new RuntimeException(e);
-        }
-
-    }
+    @Autowired
+    QuartzService service;
 
     @Autowired
-    private JdbcTemplate jdbcTemplate;
-
+    Scheduler scheduler;
+    @Test
+    void contextLoads() throws SchedulerException {
+        service.addJob("execute","group1", DbCompareServiceImpl.class,"0/2 * * * * ? *");
+        System.out.println(134);
+    }
     @Test
     void dbTest() throws SQLException {
         String definition_query = """
@@ -98,21 +87,21 @@ class VerifyApplicationTests {
 
 
     @Autowired
-    DbCompareServiceImpl service;
+    DbCompareServiceImpl service1;
 
     @Test
     void test() throws SQLException {
-        DbCompareDto dbCompareDto = new DbCompareDto();
-        DbConnection dbConnection1 = new DbConnection();
-        dbConnection1.setDbType("MYSQL");
-        dbConnection1.setHost("localhost");
-        dbConnection1.setPort(3306);
-        dbConnection1.setUsername("root");
-        dbConnection1.setPassword("infocore");
-        dbCompareDto.setSourceDb(dbConnection1);
-        dbCompareDto.setTargetDb(dbConnection1);
-
-        service.start(dbCompareDto);
+//        DbCompare dbCompare = new DbCompareDto();
+//        DbConnection dbConnection1 = new DbConnection();
+//        dbConnection1.setDbType("MYSQL");
+//        dbConnection1.setHost("localhost");
+//        dbConnection1.setPort(3306);
+//        dbConnection1.setUsername("root");
+//        dbConnection1.setPassword("infocore");
+//        dbCompareDto.setSourceDb(dbConnection1);
+//        dbCompareDto.setTargetDb(dbConnection1);
+//
+//        service1.start(dbCompareDto);
 
     }
     @Getter

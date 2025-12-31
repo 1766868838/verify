@@ -2,14 +2,18 @@ package cn.infocore.dbs.compare.controller;
 
 import cn.infocore.dbs.compare.model.DbCompare;
 import cn.infocore.dbs.compare.model.dto.DbCompareDto;
+import cn.infocore.dbs.compare.quartz.QuartzService;
 import cn.infocore.dbs.compare.service.impl.DbCompareServiceImpl;
+import cn.infocore.dbs.compare.service.impl.TestJob;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.quartz.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+import java.sql.SQLException;
 import java.util.List;
 
 @RestController
@@ -20,9 +24,14 @@ public class DbCompareController {
     @Autowired
     private DbCompareServiceImpl service;
 
+    @Autowired
+    private Scheduler scheduler;
+
+    @Autowired
+    private QuartzService quartzService;
     @PostMapping
     @Operation(summary = "新增数据校验", description = "新增数据校验")
-    public void create(DbCompareDto dbCompareDto){
+    public void create(@RequestBody DbCompareDto dbCompareDto){
         service.create(dbCompareDto);
     }
 
@@ -34,8 +43,8 @@ public class DbCompareController {
 
     @PutMapping
     @Operation(summary = "更新数据校验")
-    public void update(DbCompareDto dbCompareDto){
-        service.update(dbCompareDto);
+    public void update(@RequestBody DbCompare dbCompare){
+        service.update(dbCompare);
     }
 
     @GetMapping
@@ -44,4 +53,27 @@ public class DbCompareController {
         return service.list();
     }
 
+    @PostMapping("/start")
+    @Operation(summary = "启动数据校验任务")
+    public void start(@RequestBody DbCompare dbCompare) throws SchedulerException {
+        JobDataMap jobDataMap = new JobDataMap();
+        jobDataMap.put("DbCompare", dbCompare);
+
+
+
+        quartzService.addJob(dbCompare.getName(),"group1",
+                DbCompareServiceImpl.class, jobDataMap);
+    }
+    @PostMapping("/pause")
+    @Operation(summary = "暂停数据校验任务")
+    public void pause(@RequestBody DbCompare dbCompare) throws SchedulerException {
+        quartzService.pauseJob(dbCompare.getName(),"group1");
+    }
+
+    @PostMapping("/resume")
+    @Operation(summary = "恢复数据校验任务")
+    public void resume(@RequestBody DbCompare dbCompare) throws SchedulerException {
+//        quartzService.resumeJob(dbCompare.getName(),"group1");
+        quartzService.addJob("test","gourp2", TestJob.class, "* * * * * ? *");
+    }
 }
