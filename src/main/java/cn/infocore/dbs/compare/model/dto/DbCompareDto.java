@@ -14,6 +14,7 @@ import java.util.Date;
 
 @Getter
 @Setter
+@MappedSuperclass
 public class DbCompareDto implements Serializable{
 
     private static final long serialVersionUID = 1L;

@@ -6,6 +6,8 @@ import cn.infocore.dbs.compare.model.DbConnection;
 import cn.infocore.dbs.compare.model.dto.DbCompareDto;
 import cn.infocore.dbs.compare.quartz.QuartzService;
 import cn.infocore.dbs.compare.service.impl.DbCompareServiceImpl;
+import cn.infocore.dbs.compare.verify.DbCompareEntry;
+import cn.infocore.dbs.compare.verify.DbCompareUtils;
 import cn.infocore.dbs.compare.verify.VerifyClient;
 import cn.infocore.dbs.compare.verify.VerifyClient1;
 import com.mysql.cj.jdbc.ConnectionImpl;
@@ -92,7 +94,7 @@ class VerifyApplicationTests {
     @Test
     void test() throws SQLException {
 //        DbCompare dbCompare = new DbCompareDto();
-//        DbConnection dbConnection1 = new DbConnection();
+        DbConnection dbConnection1 = new DbConnection();
 //        dbConnection1.setDbType("MYSQL");
 //        dbConnection1.setHost("localhost");
 //        dbConnection1.setPort(3306);
@@ -102,7 +104,8 @@ class VerifyApplicationTests {
 //        dbCompareDto.setTargetDb(dbConnection1);
 //
 //        service1.start(dbCompareDto);
-
+        DbCompareEntry dbCompareEntry = new DbCompareEntry();
+        dbCompareEntry.compareAllDatabases(dbConnection1, dbConnection1, null, null);
     }
     @Getter
     @Setter

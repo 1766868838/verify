@@ -3,9 +3,13 @@ package cn.infocore.dbs.compare.model;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.io.Serializable;
+
 @Getter
 @Setter
-public class ObjectDiff {
+public class ObjectDiff implements Serializable {
+
+    private static final long serialVersionUID = 1L;
 
     public enum ObjectType{
         TABLE, VIEW, FUNCTION, PROCEDURE, TRIGGER

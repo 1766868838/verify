@@ -7,5 +7,5 @@ public interface DbResultService {
 
     DbResult get(Long id);
 
-    void insert(DbResult dbResult);
+    Long insert(DbResult dbResult);
 }

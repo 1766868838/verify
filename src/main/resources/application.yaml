@@ -1,8 +1,8 @@
 spring:
   datasource:
     username: root
-    password: infocore
-    url: jdbc:mysql://localhost:3306/test3
+    password: 123456
+    url: jdbc:mysql://localhost:3306/test1
   jpa:
     hibernate:
       ddl-auto: update
@@ -21,4 +21,4 @@ springdoc:
     disable-swagger-default-url: true
     display-request-duration: true
 server:
-  port: 8080
+  port: 8081

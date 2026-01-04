@@ -6,6 +6,7 @@ import com.github.difflib.UnifiedDiffUtils;
 import com.github.difflib.patch.Patch;
 import lombok.Getter;
 import lombok.Setter;
+import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.ImmutableTriple;
 import org.springframework.stereotype.Component;
@@ -252,12 +253,13 @@ public class DbCompareUtils {
             regex_pattern = String.format(RE_EMPTY_ALTER_TABLE,String.format("r'{0}(?:(?:\\.){0})?'","r'(`(?:[^`]|``)+`|\\w+|\\w+[\\%\\*]?|[\\%\\*])'"));
         }
 
-        if (!diffList.isEmpty() && structureCheck.getLeft() && structureCheck.getRight()) {
+        if (!diffList.isEmpty() && structureCheck.getLeft() != null && structureCheck.getLeft()
+                && structureCheck.getRight() != null && structureCheck.getLeft()) {
             System.out.println("[PASS]");
             return null;
         }
 
-        if (!diffList.isEmpty() && direction.isEmpty() && structureCheck.getLeft()
+        if (ObjectUtils.allNotNull(diffList, structureCheck.getMiddle(), structureCheck.getRight()) && !diffList.isEmpty() && direction.isEmpty() && structureCheck.getLeft()
                 && structureCheck.getMiddle().isEmpty()) {
             if (!quiet) {
                 System.out.println("[PASS]");
@@ -1279,7 +1281,7 @@ public class DbCompareUtils {
                 }
 
                 String originalQuery = String.format(QUERY_COMPARE_SPAN,
-                        "test3",
+                        conn.getCatalog(),
                         tableName,
                         whereClause.toString());
 

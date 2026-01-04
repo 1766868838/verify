@@ -13,8 +13,9 @@ import java.util.Date;
 @Entity
 @Getter
 @Setter
-public class DbCompare extends DbCompareDto implements Serializable {
+public class DbCompare extends DbCompareDto{
 
+    private static final long serialVersionUID = 1L;
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -25,5 +26,5 @@ public class DbCompare extends DbCompareDto implements Serializable {
     /**
      * 对应的最新一条校验结果id
      */
-    private Long obResultId;
+    private Long dbResultId;
 }

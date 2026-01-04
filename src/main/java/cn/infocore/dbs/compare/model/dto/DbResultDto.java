@@ -1,9 +1,13 @@
 package cn.infocore.dbs.compare.model.dto;
 
 import cn.infocore.dbs.compare.converter.DbObjectConverter;
+import cn.infocore.dbs.compare.converter.MapStringConverter;
+import cn.infocore.dbs.compare.converter.ObjectDiffConverter;
 import cn.infocore.dbs.compare.model.DbResult;
 import cn.infocore.dbs.compare.model.ObjectDiff;
 import jakarta.persistence.Convert;
+import jakarta.persistence.Lob;
+import jakarta.persistence.MappedSuperclass;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -15,12 +19,14 @@ import java.util.Objects;
 
 @Getter
 @Setter
+@MappedSuperclass
 public class DbResultDto implements Serializable {
 
     private static final long serialVersionUID = 1L;
     private String sourceDb;
     private String targetDb;
 
+    @Convert(converter = MapStringConverter.class)
     private Map<String,Integer> sourceObject;
 //    private int sourceTable;
 //    private int sourceCount;
@@ -29,6 +35,7 @@ public class DbResultDto implements Serializable {
 //    private int sourceProcedure;
 //    private int sourceTrigger;
 
+    @Convert(converter = MapStringConverter.class)
     private Map<String,Integer> targetObject;
 //    private int targetTable;
 //    private int targetCount;
@@ -40,13 +47,14 @@ public class DbResultDto implements Serializable {
     /**
      * 存储具体的差异，通过length获取差异个数
      */
-    @Convert(converter = DbObjectConverter.class)
+    @Lob
+    @Convert(converter = ObjectDiffConverter.class)
     private List<ObjectDiff> objectDiff = new ArrayList<>();
 
     /**
      * 修复语句
      */
-    private String repairSql;
+    private String repairSql = "";
 
     public void addObjectDiff(List<ObjectDiff> objectDiff){
         this.objectDiff.addAll(objectDiff);
@@ -57,7 +65,7 @@ public class DbResultDto implements Serializable {
      * @param repairSql
      */
     public void addRepairSql(List<String> repairSql){
-        this.repairSql += String.join("",repairSql);
+        this.repairSql += String.join(";",repairSql);
     }
 
     @Override

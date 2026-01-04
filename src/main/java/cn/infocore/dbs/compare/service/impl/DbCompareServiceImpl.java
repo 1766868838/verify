@@ -4,6 +4,7 @@ import cn.infocore.dbs.compare.model.DbConnection;
 import cn.infocore.dbs.compare.model.DbResult;
 import cn.infocore.dbs.compare.model.ObjectDiff;
 import cn.infocore.dbs.compare.model.dto.DbResultDto;
+import cn.infocore.dbs.compare.model.vo.DbCompareVo;
 import cn.infocore.dbs.compare.verify.DbCompareEntry;
 import cn.infocore.dbs.compare.verify.VerifyClient;
 import cn.infocore.dbs.compare.converter.DbObjectConverter;
@@ -49,6 +50,17 @@ public class DbCompareServiceImpl implements DbCompareService, Job {
         DbCompare dbCompare = new DbCompare();
         BeanUtils.copyProperties(dbCompareDto,dbCompare);
         dao.save(dbCompare);
+    }
+
+    @Override
+    public DbCompareVo get(Long id) {
+        DbCompare dbCompare = dao.findById(id).get();
+        // result 是通过dbCompare的 dbResult 获取的，存储的是最后一次result的id
+        DbResult result = dbResultService.get(dbCompare.getDbResultId());
+        DbCompareVo dbCompareVo = new DbCompareVo();
+        BeanUtils.copyProperties(dbCompare, dbCompareVo);
+        dbCompareVo.setDbResult(result);
+        return dbCompareVo;
     }
 
     @Override
@@ -103,7 +115,7 @@ public class DbCompareServiceImpl implements DbCompareService, Job {
             targetDb.setPassword(dbCompare.getTargetPassword());
 
             DbResultDto resultDto = dbCompareEntry.databaseCompare(sourceDb, targetDb,
-                    "test3", "test4", null,1);
+                    "test1", "test2", null,1);
             resultDto.setSourceDb(sourceDb.getHost());
             resultDto.setTargetDb(targetDb.getHost());
 
@@ -114,6 +126,9 @@ public class DbCompareServiceImpl implements DbCompareService, Job {
             BeanUtils.copyProperties(resultDto,result);
             dbResultService.insert(result);
 
+            // 将result id更新到dbCompare 中
+            dbCompare.setDbResultId(result.getId());
+            update(dbCompare);
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }

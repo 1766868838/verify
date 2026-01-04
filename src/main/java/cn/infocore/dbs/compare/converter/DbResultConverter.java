@@ -13,8 +13,7 @@ import org.springframework.stereotype.Component;
 @Convert
 public class DbResultConverter implements AttributeConverter<DbResult,String> {
 
-    @Autowired
-    private ObjectMapper objectMapper;
+    private final ObjectMapper objectMapper =  new ObjectMapper();
 
     @Override
     public String convertToDatabaseColumn(DbResult dbResult) {

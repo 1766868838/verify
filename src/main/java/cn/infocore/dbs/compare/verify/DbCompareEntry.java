@@ -79,7 +79,7 @@ public class DbCompareEntry {
 
             // 以秒为单位
             if (!db1Conn.isValid(10)) throw new SQLException(String.format(ERROR_DB_MISSING, db1));
-            if (!db1Conn.isValid(10)) throw new SQLException(String.format(ERROR_DB_MISSING, db2));
+            if (!db2Conn.isValid(10)) throw new SQLException(String.format(ERROR_DB_MISSING, db2));
 
             if (!quiet) {
                 String message;
@@ -190,6 +190,7 @@ public class DbCompareEntry {
 
             }
 
+            // 有个问题，这边很可能是异步的，要怎么将结果返回给
             return dbResultDto;
         }
     }
@@ -237,13 +238,16 @@ public class DbCompareEntry {
      * @return 对比结果 - true表示全部匹配，false表示有差异，null表示没有可比较的数据库
      */
     public boolean compareAllDatabases(DbConnection server1Val, DbConnection server2Val, List<String> excludeList, Map<String, Object> options) throws SQLException {
+
+        if( options == null) options = new HashMap<>();
+
         boolean success = true;
         boolean quiet = (boolean) options.getOrDefault("quiet", false);
 
         // 这里的server1Val只是装饰的，实际应该用的Connection
 
-        try (Connection conn1 = DriverManager.getConnection("jdbc:mysql://localhost:3306", "root", "infocore");
-             Connection conn2 = DriverManager.getConnection("jdbc:mysql://localhost:3307", "root", "infocore")) {
+        try (Connection conn1 = DriverManager.getConnection("jdbc:mysql://localhost:3306", "root", "123456");
+             Connection conn2 = DriverManager.getConnection("jdbc:mysql://localhost:3306", "root", "123456")) {
 
             // 检查指定的服务器是否相同，这里简化处理
             if (conn1.equals(conn2)) {

@@ -41,6 +41,9 @@ public class QuartzService {
      * @throws SchedulerException
      */
     public void addJob(String jobName, String jobGroup, Class<? extends Job> jobClass, JobDataMap jobDataMap) throws SchedulerException {
+
+        jobDataMap.computeIfAbsent("startTime", k -> new Date());
+
         JobDetail jobDetail = JobBuilder.newJob(jobClass)
                 .withIdentity(jobName, jobGroup)
                 .usingJobData(jobDataMap)
@@ -48,7 +51,7 @@ public class QuartzService {
 
         SimpleTrigger trigger = (SimpleTrigger)TriggerBuilder.newTrigger()
                 .withIdentity(jobName, jobGroup)
-                .startNow()
+                .startAt((Date) jobDataMap.get("startTime"))
                 .build();
 
 

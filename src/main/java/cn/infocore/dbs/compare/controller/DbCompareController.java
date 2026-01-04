@@ -2,18 +2,16 @@ package cn.infocore.dbs.compare.controller;
 
 import cn.infocore.dbs.compare.model.DbCompare;
 import cn.infocore.dbs.compare.model.dto.DbCompareDto;
+import cn.infocore.dbs.compare.model.vo.DbCompareVo;
 import cn.infocore.dbs.compare.quartz.QuartzService;
 import cn.infocore.dbs.compare.service.impl.DbCompareServiceImpl;
-import cn.infocore.dbs.compare.service.impl.TestJob;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.quartz.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
-import java.sql.SQLException;
 import java.util.List;
 
 @RestController
@@ -53,6 +51,12 @@ public class DbCompareController {
         return service.list();
     }
 
+    @GetMapping("/{id}")
+    @Operation(summary = "查看数据校验详情")
+    public DbCompareVo get(@PathVariable("id") Long id){
+        return service.get(id);
+    }
+
     @PostMapping("/start")
     @Operation(summary = "启动数据校验任务")
     public void start(@RequestBody DbCompare dbCompare) throws SchedulerException {
@@ -73,7 +77,7 @@ public class DbCompareController {
     @PostMapping("/resume")
     @Operation(summary = "恢复数据校验任务")
     public void resume(@RequestBody DbCompare dbCompare) throws SchedulerException {
-//        quartzService.resumeJob(dbCompare.getName(),"group1");
-        quartzService.addJob("test","gourp2", TestJob.class, "* * * * * ? *");
+        quartzService.resumeJob(dbCompare.getName(),"group1");
+        //quartzService.addJob("test","gourp2", TestJob.class, "* * * * * ? *");
     }
 }

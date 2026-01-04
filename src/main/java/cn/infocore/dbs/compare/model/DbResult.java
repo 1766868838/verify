@@ -9,6 +9,9 @@ import lombok.Setter;
 @Getter
 @Setter
 public class DbResult extends DbResultDto {
+
+    private static final long serialVersionUID = 1L;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
